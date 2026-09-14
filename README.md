@@ -129,4 +129,20 @@ dotnet dev-certs https --trust
 dotnet run --project src/KameronSushi.Api --launch-profile https
 ```
 
-La API utiliza `https://localhost:7227` y redirige HTTP a HTTPS cuando el puerto HTTPS está configurado. La gestión de errores utiliza Problem Details. Guarda credenciales en secretos de usuario o variables de entorno, nunca en los archivos versionados de configuración.
+El perfil HTTPS utiliza `https://localhost:7227`. En Render, el proxy público realiza la redirección a HTTPS. La gestión de errores utiliza Problem Details. Guarda credenciales en secretos de usuario o variables de entorno, nunca en los archivos versionados de configuración.
+
+## Despliegue Docker en Render
+
+El `Dockerfile` publica la API con .NET 10 y ejecuta únicamente la imagen de runtime. En Render crea un Web Service con runtime Docker y deja el Dockerfile en la raíz del repositorio. La API escucha en `0.0.0.0` usando la variable `PORT` que proporciona Render; si no existe, el contenedor usa el puerto `10000`.
+
+Configura al menos estas variables en **Environment** antes de probar el servicio:
+
+```text
+Database__Username
+Database__Password
+WhatsApp__AccessToken
+WhatsApp__VerifyToken
+WhatsApp__AppSecret
+```
+
+Render termina HTTPS en su proxy y reenvía el protocolo original mediante cabeceras `X-Forwarded-*`, que la API procesa antes de atender el webhook.
