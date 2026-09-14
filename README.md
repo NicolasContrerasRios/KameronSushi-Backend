@@ -110,7 +110,7 @@ El pago con tarjeta responde que todavía no está disponible hasta integrar Mer
 
 ## Ejecutar
 
-Desde la carpeta `backend`, con el SDK .NET 10.0.201 (o un parche posterior de la banda 10.0.2xx):
+Desde la carpeta `backend`, con el SDK .NET 10.0.201 o una banda posterior de .NET 10:
 
 ```powershell
 dotnet restore KameronSushi.Backend.slnx
