@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/KameronSushi.Api/KameronSushi.Api.csproj" />
+    <Project Path="src/KameronSushi.Application/KameronSushi.Application.csproj" />
+    <Project Path="src/KameronSushi.Domain/KameronSushi.Domain.csproj" />
+    <Project Path="src/KameronSushi.Infrastructure/KameronSushi.Infrastructure.csproj" />
+  </Folder>
+</Solution>

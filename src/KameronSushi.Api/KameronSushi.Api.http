@@ -1,0 +1,16 @@
+@KameronSushi.Api_HostAddress = http://localhost:5102
+
+GET {{KameronSushi.Api_HostAddress}}/health
+Accept: text/plain
+
+###
+
+GET {{KameronSushi.Api_HostAddress}}/openapi/v1.json
+Accept: application/json
+
+### Verificación de Meta (reemplazar solo en el cliente local; no guardar el secreto)
+
+GET {{KameronSushi.Api_HostAddress}}/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=TOKEN_LOCAL&hub.challenge=123456
+Accept: text/plain
+
+###
