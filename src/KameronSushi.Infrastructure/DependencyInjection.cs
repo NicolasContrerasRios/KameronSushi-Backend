@@ -27,6 +27,7 @@ public static class DependencyInjection
                 Username = options.Username,
                 Password = options.Password,
                 SslMode = Enum.TryParse<SslMode>(options.SslMode, true, out var sslMode) ? sslMode : SslMode.Require,
+                GssEncryptionMode = GssEncryptionMode.Disable,
                 ApplicationName = "KameronSushi.Api"
             };
             return NpgsqlDataSource.Create(builder.ConnectionString);
