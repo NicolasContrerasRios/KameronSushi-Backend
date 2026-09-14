@@ -4,13 +4,15 @@ using System.Text.Json;
 using KameronSushi.Application.Abstractions;
 using KameronSushi.Application.WhatsApp;
 using KameronSushi.Infrastructure.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace KameronSushi.Infrastructure.WhatsApp;
 
 public sealed class MetaWhatsAppMessageSender(
     HttpClient httpClient,
-    IOptions<WhatsAppOptions> options) : IWhatsAppMessageSender
+    IOptions<WhatsAppOptions> options,
+    ILogger<MetaWhatsAppMessageSender> logger) : IWhatsAppMessageSender
 {
     public async Task<string?> SendAsync(string recipientWaId, OutgoingWhatsAppMessage message, CancellationToken cancellationToken)
     {
@@ -30,6 +32,10 @@ public sealed class MetaWhatsAppMessageSender(
         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
         if (!response.IsSuccessStatusCode)
         {
+            logger.LogWarning(
+                "Meta rechazó el mensaje saliente con HTTP {StatusCode}. Respuesta: {ResponseBody}",
+                (int)response.StatusCode,
+                responseBody);
             throw new HttpRequestException($"Meta respondió {(int)response.StatusCode}: {responseBody}");
         }
 
