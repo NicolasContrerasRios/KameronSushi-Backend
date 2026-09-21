@@ -23,6 +23,8 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 var app = builder.Build();
 
+await app.Services.ApplyKameronSushiMigrationsAsync();
+
 app.UseForwardedHeaders();
 app.UseExceptionHandler();
 

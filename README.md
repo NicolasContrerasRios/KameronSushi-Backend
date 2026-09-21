@@ -42,7 +42,7 @@ Las carpetas vacías contienen `.gitkeep` para conservarlas en Git.
 
 Las dependencias apuntan hacia el núcleo. Application y Domain no deben referenciar Infrastructure ni Api. Los controladores delegarán las operaciones a Application; las implementaciones concretas se registrarán en el contenedor de inyección de dependencias desde la API. Infrastructure puede acceder a Domain mediante la referencia transitiva de Application.
 
-Esta base todavía no implementa casos de uso, autenticación ni conexión a una base de datos. Los directorios reservan su ubicación; se añadirán las dependencias necesarias al implementar cada funcionalidad.
+La solución ya implementa persistencia PostgreSQL, el flujo inicial del bot de WhatsApp y las primeras operaciones para caja y cocina. La autenticación de operadores todavía está pendiente y debe agregarse antes de exponer estas rutas en producción.
 
 ## Configuración local sin filtrar secretos
 
@@ -105,6 +105,8 @@ La integración saliente usa Graph API `v26.0`, configurable mediante `WhatsApp:
 - Opciones, envolturas, recargos, salsa y cantidad para rolls configurables.
 - Carrito persistido como pedido borrador y confirmación de pago en efectivo.
 - Comandos de recuperación: `menú`, `pedido` y `finalizar`.
+- API de caja para cargar el catálogo desde PostgreSQL y crear pedidos locales con sus detalles y pagos.
+- API de cocina para consultar pedidos activos y marcarlos como listos.
 
 El pago con tarjeta responde que todavía no está disponible hasta integrar Mercado Pago. La tarifa y cobertura de delivery todavía necesitan una regla comercial; antes de producción se debe configurar ese cálculo. Quitar líneas o cambiar cantidades y los avisos automáticos desde cocina también quedan para la siguiente etapa.
 
@@ -121,6 +123,29 @@ dotnet run --project src/KameronSushi.Api --launch-profile http
 - Salud del proceso: `http://localhost:5102/health`. Incluye una consulta real a PostgreSQL y devuelve estado no saludable si faltan credenciales o la base no responde.
 - Documento OpenAPI en Development: `http://localhost:5102/openapi/v1.json`. No incluye interfaz Swagger UI.
 - Peticiones de ejemplo: `src/KameronSushi.Api/KameronSushi.Api.http`.
+
+La aplicación de escritorio usa `https://kameronsushi-backend.onrender.com/`, configurado en su `appsettings.json`. Para trabajar con una API local se puede reemplazar temporalmente por `http://localhost:5102/` y ejecutar primero el backend:
+
+```powershell
+dotnet run --project ..\AplicacionEscritorio\KameronSushi.Desktop
+```
+
+La URL está en `AplicacionEscritorio/KameronSushi.Desktop/appsettings.json`. En otro equipo o en producción puede reemplazarse sin recompilar mediante la variable `KAMERONSUSHI_API_URL`. La aplicación de escritorio no recibe la contraseña de PostgreSQL; únicamente el backend la conoce.
+
+Al iniciar, el backend registra y aplica sus migraciones pendientes en la tabla `schema_migrations`. La migración `002_edenred_payment_method` permite guardar pagos Edenred.
+
+## API inicial de caja y cocina
+
+| Método | Ruta | Función |
+| --- | --- | --- |
+| `GET` | `/api/pos/catalog` | Devuelve productos activos y sus selecciones configurables con el precio final. |
+| `POST` | `/api/pos/orders` | Crea un pedido local, recalcula sus precios en el servidor y registra sus pagos. |
+| `GET` | `/api/pos/orders?status=en_preparacion&limit=50` | Lista pedidos recientes para la caja; el estado es opcional. |
+| `GET` | `/api/pos/orders/{orderId}` | Devuelve el encabezado, los ítems y los pagos de un pedido. |
+| `GET` | `/api/kitchen/orders` | Lista pedidos confirmados o en preparación para cocina. |
+| `PATCH` | `/api/kitchen/orders/{orderId}/ready` | Marca un pedido activo como listo. |
+
+El cliente puede enviar los métodos `efectivo`, `tarjeta` o `edenred`. El backend valida productos, variantes y pagos contra PostgreSQL y nunca acepta el precio enviado por la caja. Los ejemplos completos están en `src/KameronSushi.Api/KameronSushi.Api.http`.
 
 Para desarrollo con HTTPS:
 

@@ -14,3 +14,52 @@ GET {{KameronSushi.Api_HostAddress}}/webhooks/whatsapp?hub.mode=subscribe&hub.ve
 Accept: text/plain
 
 ###
+
+GET {{KameronSushi.Api_HostAddress}}/api/pos/catalog
+Accept: application/json
+
+### Crear un pedido. Reemplazar los identificadores con valores de /api/pos/catalog.
+### En un producto sin configuración, optionId, productWrapperId y sauceId deben ser null.
+
+POST {{KameronSushi.Api_HostAddress}}/api/pos/orders
+Content-Type: application/json
+
+{
+  "items": [
+    {
+      "productId": 1,
+      "optionId": null,
+      "productWrapperId": null,
+      "sauceId": null,
+      "quantity": 1
+    }
+  ],
+  "payments": [
+    {
+      "method": "efectivo",
+      "amount": 10000
+    }
+  ]
+}
+
+###
+
+GET {{KameronSushi.Api_HostAddress}}/api/pos/orders?limit=50
+Accept: application/json
+
+###
+
+GET {{KameronSushi.Api_HostAddress}}/api/pos/orders/1
+Accept: application/json
+
+###
+
+GET {{KameronSushi.Api_HostAddress}}/api/kitchen/orders
+Accept: application/json
+
+###
+
+PATCH {{KameronSushi.Api_HostAddress}}/api/kitchen/orders/1/ready
+Accept: application/json
+
+###
