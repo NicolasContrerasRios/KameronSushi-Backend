@@ -18,6 +18,51 @@ Accept: text/plain
 GET {{KameronSushi.Api_HostAddress}}/api/pos/catalog
 Accept: application/json
 
+###
+
+GET {{KameronSushi.Api_HostAddress}}/api/pos/customers/by-phone/56912345678/loyalty
+Accept: application/json
+
+### Consultar o abrir el turno antes de crear pedidos locales
+
+GET {{KameronSushi.Api_HostAddress}}/api/pos/shifts/current
+Accept: application/json
+
+###
+
+POST {{KameronSushi.Api_HostAddress}}/api/pos/shifts/open
+Content-Type: application/json
+
+{
+  "openingAmount": 50000
+}
+
+### Reemplazar 1 por el identificador del turno
+
+GET {{KameronSushi.Api_HostAddress}}/api/pos/shifts/1/report
+Accept: application/json
+
+###
+
+POST {{KameronSushi.Api_HostAddress}}/api/pos/shifts/1/movements
+Content-Type: application/json
+
+{
+  "type": "retiro",
+  "amount": 10000,
+  "reason": "Retiro de seguridad"
+}
+
+###
+
+POST {{KameronSushi.Api_HostAddress}}/api/pos/shifts/1/close
+Content-Type: application/json
+
+{
+  "countedCash": 75000,
+  "notes": "Cierre sin novedades"
+}
+
 ### Crear un pedido. Reemplazar los identificadores con valores de /api/pos/catalog.
 ### En un producto sin configuración, optionId, productWrapperId y sauceId deben ser null.
 
@@ -39,7 +84,9 @@ Content-Type: application/json
       "method": "efectivo",
       "amount": 10000
     }
-  ]
+  ],
+  "customerId": null,
+  "rewards": []
 }
 
 ###
@@ -59,7 +106,54 @@ Accept: application/json
 
 ###
 
+GET {{KameronSushi.Api_HostAddress}}/api/kitchen/orders/performance
+Accept: application/json
+
+###
+
 PATCH {{KameronSushi.Api_HostAddress}}/api/kitchen/orders/1/ready
 Accept: application/json
+
+###
+
+GET {{KameronSushi.Api_HostAddress}}/api/admin/categories
+Accept: application/json
+
+###
+
+GET {{KameronSushi.Api_HostAddress}}/api/admin/products
+Accept: application/json
+
+###
+
+POST {{KameronSushi.Api_HostAddress}}/api/admin/products
+Content-Type: application/json
+
+{
+  "categoryId": 1,
+  "name": "Producto nuevo",
+  "description": "Descripción",
+  "price": 3990,
+  "active": true,
+  "available": true
+}
+
+###
+
+GET {{KameronSushi.Api_HostAddress}}/api/admin/rewards
+Accept: application/json
+
+###
+
+POST {{KameronSushi.Api_HostAddress}}/api/admin/rewards
+Content-Type: application/json
+
+{
+  "productId": 15,
+  "pointsCost": 500,
+  "active": true,
+  "stock": null,
+  "limitPerOrder": 1
+}
 
 ###

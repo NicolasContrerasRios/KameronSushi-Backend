@@ -35,6 +35,7 @@ public static class DependencyInjection
 
         services.AddScoped<IWhatsAppStore, PostgresWhatsAppStore>();
         services.AddScoped<IPosStore, PostgresPosStore>();
+        services.AddScoped<IAdminStore, PostgresAdminStore>();
         services.AddSingleton<IWebhookSignatureValidator, MetaWebhookSignatureValidator>();
         services.AddHttpClient<IWhatsAppMessageSender, MetaWhatsAppMessageSender>();
         return services;
