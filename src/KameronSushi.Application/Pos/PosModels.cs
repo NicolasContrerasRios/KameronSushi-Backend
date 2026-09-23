@@ -7,8 +7,12 @@ public sealed record CatalogProduct(
     string? Description,
     decimal Price,
     bool Available,
+    IReadOnlyList<CatalogRollOption> Options,
+    IReadOnlyList<CatalogWrapper> Wrappers,
+    IReadOnlyList<CatalogSauce> Sauces,
     IReadOnlyList<CatalogSelection> Selections);
 
+// Se conserva durante la transición para las cajas que aún usan el catálogo anterior.
 public sealed record CatalogSelection(
     long OptionId,
     long ProductWrapperId,
@@ -16,6 +20,21 @@ public sealed record CatalogSelection(
     string Label,
     string Details,
     decimal PriceAdjustment);
+
+public sealed record CatalogRollOption(
+    long OptionId,
+    short Number,
+    string Name,
+    string Ingredients,
+    long? FixedWrapperId);
+
+public sealed record CatalogWrapper(
+    long ProductWrapperId,
+    string Name,
+    decimal PriceAdjustment,
+    bool IsDefault);
+
+public sealed record CatalogSauce(long SauceId, string Name, string? Description);
 
 public sealed record CreateLocalOrder(
     IReadOnlyList<CreateLocalOrderItem> Items,

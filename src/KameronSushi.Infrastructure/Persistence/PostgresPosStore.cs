@@ -80,48 +80,58 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             }
         }
 
-        long sauceId;
+        var sauces = new List<CatalogSauce>();
         await using (var command = connection.CreateCommand())
         {
-            command.CommandText = "SELECT id_salsa FROM salsas WHERE activa = TRUE ORDER BY CASE WHEN nombre = 'Soya' THEN 0 ELSE 1 END, id_salsa LIMIT 1;";
-            sauceId = Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken)
-                ?? throw new InvalidOperationException("No existe una salsa activa para configurar los productos."));
+            command.CommandText = "SELECT id_salsa, nombre, descripcion FROM salsas WHERE activa = TRUE ORDER BY nombre;";
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                sauces.Add(new CatalogSauce(
+                    reader.GetInt64(0), reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2)));
+            }
         }
 
         foreach (var product in products.Where(product => product.RequiresConfiguration))
         {
             if (!options.TryGetValue(product.Id, out var productOptions) || productOptions.Count == 0 ||
-                !wrappers.TryGetValue(product.Id, out var productWrappers) || productWrappers.Count == 0)
+                !wrappers.TryGetValue(product.Id, out var productWrappers) || productWrappers.Count == 0 ||
+                sauces.Count == 0)
             {
                 product.Available = false;
                 continue;
             }
 
+            product.Options.AddRange(productOptions.Select(option => new CatalogRollOption(
+                option.Id, option.Number, option.Name, option.Ingredients, option.FixedWrapperId)));
+            product.Wrappers.AddRange(productWrappers.Select(wrapper => new CatalogWrapper(
+                wrapper.Id, wrapper.Name, wrapper.PriceAdjustment, wrapper.IsDefault)));
+            product.Sauces.AddRange(sauces);
+
+            var defaultSauce = sauces.FirstOrDefault(sauce => sauce.Name.Equals("Soya", StringComparison.OrdinalIgnoreCase))
+                ?? sauces[0];
             if (product.Category.Equals("Hand rolls", StringComparison.OrdinalIgnoreCase))
             {
                 var option = productOptions[0];
                 product.Selections.AddRange(productWrappers.Select(wrapper => new CatalogSelection(
-                    option.Id, wrapper.Id, sauceId, wrapper.Name,
+                    option.Id, wrapper.Id, defaultSauce.SauceId, wrapper.Name,
                     $"Envoltura: {wrapper.Name}", wrapper.PriceAdjustment)));
-                continue;
             }
-
-            foreach (var option in productOptions)
+            else
             {
-                var wrapper = option.FixedWrapperId is long fixedWrapperId
-                    ? productWrappers.FirstOrDefault(value => value.Id == fixedWrapperId)
-                    : productWrappers.FirstOrDefault(value => value.IsDefault) ?? productWrappers[0];
-                if (wrapper is null) continue;
-
-                var label = $"N.º {option.Number} · {option.Ingredients}";
-                var details = option.FixedWrapperId is null
-                    ? label
-                    : $"{label} · Envoltura: {wrapper.Name}";
-                product.Selections.Add(new CatalogSelection(
-                    option.Id, wrapper.Id, sauceId, label, details, wrapper.PriceAdjustment));
+                foreach (var option in productOptions)
+                {
+                    var wrapper = option.FixedWrapperId is long fixedWrapperId
+                        ? productWrappers.FirstOrDefault(value => value.Id == fixedWrapperId)
+                        : productWrappers.FirstOrDefault(value => value.IsDefault) ?? productWrappers[0];
+                    if (wrapper is null) continue;
+                    var label = $"N.º {option.Number} · {option.Ingredients}";
+                    var details = option.FixedWrapperId is null ? label : $"{label} · Envoltura: {wrapper.Name}";
+                    product.Selections.Add(new CatalogSelection(
+                        option.Id, wrapper.Id, defaultSauce.SauceId, label, details, wrapper.PriceAdjustment));
+                }
             }
-
-            if (product.Selections.Count == 0) product.Available = false;
         }
 
         return products.Select(ToCatalogProduct).ToList();
@@ -962,7 +972,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
 
     private static CatalogProduct ToCatalogProduct(ProductBuilder product) =>
         new(product.Id, product.Name, product.Category, product.Description, product.Price,
-            product.Available, product.Selections);
+            product.Available, product.Options, product.Wrappers, product.Sauces, product.Selections);
 
     private static void Add<T>(Dictionary<long, List<T>> values, long key, T item)
     {
@@ -983,6 +993,9 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         public decimal Price { get; } = price;
         public bool Available { get; set; } = available;
         public bool RequiresConfiguration { get; } = requiresConfiguration;
+        public List<CatalogRollOption> Options { get; } = [];
+        public List<CatalogWrapper> Wrappers { get; } = [];
+        public List<CatalogSauce> Sauces { get; } = [];
         public List<CatalogSelection> Selections { get; } = [];
     }
 

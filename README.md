@@ -141,7 +141,7 @@ Al iniciar, el backend registra y aplica sus migraciones pendientes en la tabla 
 
 | Método | Ruta | Función |
 | --- | --- | --- |
-| `GET` | `/api/pos/catalog` | Devuelve productos activos y sus selecciones configurables con el precio final. |
+| `GET` | `/api/pos/catalog` | Devuelve productos activos y, para los rolls, listas separadas de ingredientes, envolturas y salsas. Las opciones con envoltura fija incluyen su identificador. |
 | `GET` | `/api/pos/shifts/current` | Devuelve el turno abierto o responde 204 cuando no existe. |
 | `POST` | `/api/pos/shifts/open` | Abre un turno con su fondo inicial o devuelve el que ya estaba abierto. |
 | `GET` | `/api/pos/shifts/{shiftId}/report` | Devuelve ventas, pagos, movimientos y arqueo del turno. |
