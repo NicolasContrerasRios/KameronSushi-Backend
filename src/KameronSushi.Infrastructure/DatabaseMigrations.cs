@@ -67,6 +67,18 @@ public static class DatabaseMigrations
             await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        if (!await IsAppliedAsync(connection, transaction, "004_admin_catalog", cancellationToken))
+        {
+            await using var migrationCommand = connection.CreateCommand();
+            migrationCommand.Transaction = transaction;
+            migrationCommand.CommandText = """
+                ALTER TABLE productos ADD COLUMN IF NOT EXISTS orden INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE producto_envolturas ADD COLUMN IF NOT EXISTS activa BOOLEAN NOT NULL DEFAULT TRUE;
+                INSERT INTO schema_migrations (id) VALUES ('004_admin_catalog');
+                """;
+            await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
     }
 

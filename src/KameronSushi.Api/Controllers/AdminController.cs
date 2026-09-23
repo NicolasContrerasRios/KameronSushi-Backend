@@ -12,6 +12,14 @@ public sealed class AdminController(IAdminStore store) : ControllerBase
     public async Task<ActionResult<IReadOnlyList<AdminCategory>>> GetCategories(CancellationToken cancellationToken) =>
         Ok(await store.GetCategoriesAsync(cancellationToken));
 
+    [HttpPost("categories")]
+    public Task<ActionResult<AdminCategory>> CreateCategory(SaveAdminCategory category, CancellationToken cancellationToken) =>
+        SaveCategory(null, category, cancellationToken);
+
+    [HttpPut("categories/{categoryId:long}")]
+    public Task<ActionResult<AdminCategory>> UpdateCategory(long categoryId, SaveAdminCategory category, CancellationToken cancellationToken) =>
+        SaveCategory(categoryId, category, cancellationToken);
+
     [HttpGet("products")]
     public async Task<ActionResult<IReadOnlyList<AdminProduct>>> GetProducts(CancellationToken cancellationToken) =>
         Ok(await store.GetProductsAsync(cancellationToken));
@@ -46,6 +54,49 @@ public sealed class AdminController(IAdminStore store) : ControllerBase
         }
     }
 
+    [HttpGet("wrappers")]
+    public async Task<ActionResult<IReadOnlyList<AdminWrapper>>> GetWrappers(CancellationToken cancellationToken) =>
+        Ok(await store.GetWrappersAsync(cancellationToken));
+
+    [HttpPost("wrappers")]
+    public Task<ActionResult<AdminWrapper>> CreateWrapper(SaveAdminWrapper wrapper, CancellationToken cancellationToken) =>
+        SaveWrapper(null, wrapper, cancellationToken);
+
+    [HttpPut("wrappers/{wrapperId:long}")]
+    public Task<ActionResult<AdminWrapper>> UpdateWrapper(long wrapperId, SaveAdminWrapper wrapper, CancellationToken cancellationToken) =>
+        SaveWrapper(wrapperId, wrapper, cancellationToken);
+
+    [HttpGet("sauces")]
+    public async Task<ActionResult<IReadOnlyList<AdminSauce>>> GetSauces(CancellationToken cancellationToken) =>
+        Ok(await store.GetSaucesAsync(cancellationToken));
+
+    [HttpPost("sauces")]
+    public Task<ActionResult<AdminSauce>> CreateSauce(SaveAdminSauce sauce, CancellationToken cancellationToken) =>
+        SaveSauce(null, sauce, cancellationToken);
+
+    [HttpPut("sauces/{sauceId:long}")]
+    public Task<ActionResult<AdminSauce>> UpdateSauce(long sauceId, SaveAdminSauce sauce, CancellationToken cancellationToken) =>
+        SaveSauce(sauceId, sauce, cancellationToken);
+
+    [HttpGet("products/{productId:long}/configuration")]
+    public async Task<ActionResult<AdminProductConfiguration>> GetProductConfiguration(long productId, CancellationToken cancellationToken)
+    {
+        var result = await store.GetProductConfigurationAsync(productId, cancellationToken);
+        return result is null ? NotFound() : Ok(result);
+    }
+
+    [HttpPut("products/{productId:long}/configuration")]
+    public async Task<ActionResult<AdminProductConfiguration>> SaveProductConfiguration(
+        long productId, SaveAdminProductConfiguration configuration, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await store.SaveProductConfigurationAsync(productId, configuration, cancellationToken);
+            return result is null ? NotFound() : Ok(result);
+        }
+        catch (ArgumentException exception) { return BadRequestProblem(exception); }
+    }
+
     [HttpGet("rewards")]
     public async Task<ActionResult<IReadOnlyList<AdminRewardProduct>>> GetRewards(CancellationToken cancellationToken) =>
         Ok(await store.GetRewardsAsync(cancellationToken));
@@ -72,4 +123,22 @@ public sealed class AdminController(IAdminStore store) : ControllerBase
         statusCode: StatusCodes.Status400BadRequest,
         title: "Datos inválidos",
         detail: exception.Message);
+
+    private async Task<ActionResult<AdminCategory>> SaveCategory(long? id, SaveAdminCategory category, CancellationToken token)
+    {
+        try { return Ok(await store.SaveCategoryAsync(id, category, token)); }
+        catch (ArgumentException exception) { return BadRequestProblem(exception); }
+    }
+
+    private async Task<ActionResult<AdminWrapper>> SaveWrapper(long? id, SaveAdminWrapper wrapper, CancellationToken token)
+    {
+        try { return Ok(await store.SaveWrapperAsync(id, wrapper, token)); }
+        catch (ArgumentException exception) { return BadRequestProblem(exception); }
+    }
+
+    private async Task<ActionResult<AdminSauce>> SaveSauce(long? id, SaveAdminSauce sauce, CancellationToken token)
+    {
+        try { return Ok(await store.SaveSauceAsync(id, sauce, token)); }
+        catch (ArgumentException exception) { return BadRequestProblem(exception); }
+    }
 }

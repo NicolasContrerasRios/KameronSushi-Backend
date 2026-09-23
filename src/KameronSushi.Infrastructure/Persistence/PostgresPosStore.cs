@@ -22,7 +22,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                   FROM productos p
                   JOIN categorias c ON c.id_categoria = p.id_categoria
                  WHERE p.activo = TRUE AND c.activa = TRUE
-                 ORDER BY c.orden, p.nombre_producto;
+                 ORDER BY c.orden, p.orden, p.nombre_producto;
                 """;
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
@@ -68,7 +68,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                        pe.precio_adicional, pe.predeterminada
                   FROM producto_envolturas pe
                   JOIN envolturas e ON e.id_envoltura = pe.id_envoltura
-                 WHERE e.activa = TRUE AND pe.id_producto = ANY(@product_ids)
+                 WHERE e.activa = TRUE AND pe.activa = TRUE AND pe.id_producto = ANY(@product_ids)
                  ORDER BY pe.id_producto, pe.predeterminada DESC, pe.precio_adicional, e.nombre;
                 """;
             command.Parameters.AddWithValue("product_ids", configurableIds);

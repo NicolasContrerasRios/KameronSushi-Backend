@@ -175,6 +175,7 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
             FROM producto_envolturas pe
             JOIN envolturas e ON e.id_envoltura = pe.id_envoltura
             WHERE pe.id_producto = @product_id AND e.activa
+              AND pe.activa = TRUE
             ORDER BY pe.predeterminada DESC, pe.precio_adicional, e.nombre;
             """;
         await using var command = dataSource.CreateCommand(sql);
