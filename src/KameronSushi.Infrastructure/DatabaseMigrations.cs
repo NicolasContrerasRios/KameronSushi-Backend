@@ -79,6 +79,42 @@ public static class DatabaseMigrations
             await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        if (!await IsAppliedAsync(connection, transaction, "005_promotions", cancellationToken))
+        {
+            await using var migrationCommand = connection.CreateCommand(); migrationCommand.Transaction = transaction;
+            migrationCommand.CommandText = """
+                CREATE TABLE IF NOT EXISTS promociones_admin (
+                    id_promocion BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                    id_producto BIGINT NOT NULL UNIQUE REFERENCES productos(id_producto) ON DELETE RESTRICT,
+                    productos_incluidos TEXT,
+                    salsas_incluidas INTEGER NOT NULL DEFAULT 0 CHECK (salsas_incluidas >= 0),
+                    vigente_desde TIMESTAMPTZ,
+                    vigente_hasta TIMESTAMPTZ,
+                    habilitada_retiro BOOLEAN NOT NULL DEFAULT TRUE,
+                    habilitada_delivery BOOLEAN NOT NULL DEFAULT TRUE,
+                    activa BOOLEAN NOT NULL DEFAULT TRUE,
+                    actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    CONSTRAINT ck_promocion_vigencia CHECK (vigente_hasta IS NULL OR vigente_desde IS NULL OR vigente_hasta > vigente_desde),
+                    CONSTRAINT ck_promocion_canal CHECK (habilitada_retiro OR habilitada_delivery)
+                );
+                INSERT INTO schema_migrations (id) VALUES ('005_promotions');
+                """;
+            await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (!await IsAppliedAsync(connection, transaction, "006_admin_kitchen_settings", cancellationToken))
+        {
+            await using var migrationCommand=connection.CreateCommand();migrationCommand.Transaction=transaction;migrationCommand.CommandText="""
+                CREATE TABLE IF NOT EXISTS configuracion_operativa (
+                    clave VARCHAR(100) PRIMARY KEY,
+                    valor VARCHAR(500) NOT NULL,
+                    actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                INSERT INTO configuracion_operativa(clave,valor) VALUES('tiempo_objetivo_cocina_minutos','20') ON CONFLICT(clave) DO NOTHING;
+                INSERT INTO schema_migrations(id) VALUES('006_admin_kitchen_settings');
+                """;await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
     }
 

@@ -154,17 +154,25 @@ Al iniciar, el backend registra y aplica sus migraciones pendientes en la tabla 
 | `GET` | `/api/kitchen/orders` | Lista pedidos confirmados o en preparación para cocina. |
 | `GET` | `/api/kitchen/orders/performance` | Calcula por tipo de entrega el tiempo promedio hasta quedar listo dentro del turno abierto. |
 | `PATCH` | `/api/kitchen/orders/{orderId}/ready` | Marca un pedido activo como listo. |
-| `GET` | `/api/admin/categories` | Lista las categorías disponibles para edición. |
-| `GET` | `/api/admin/products` | Lista todos los productos, incluidos los inactivos. |
-| `POST` | `/api/admin/products` | Crea un producto simple. |
-| `PUT` | `/api/admin/products/{productId}` | Actualiza nombre, categoría, precio, descripción, disponibilidad y estado. |
+| `GET/POST/PUT` | `/api/admin/categories` | Lista, crea y edita categorías, estado y orden de exhibición. |
+| `GET/POST/PUT` | `/api/admin/products` | Lista, crea y edita productos, precios, disponibilidad, orden y configuración. |
+| `GET/POST/PUT` | `/api/admin/wrappers` | Administra envolturas. |
+| `GET/POST/PUT` | `/api/admin/sauces` | Administra salsas. |
+| `GET/PUT` | `/api/admin/products/{productId}/configuration` | Consulta o reemplaza opciones y envolturas de un roll configurable. |
+| `GET/POST/PUT` | `/api/admin/promotions` | Administra vigencia, canal, salsas y contenido de promociones. |
 | `GET` | `/api/admin/rewards` | Lista la configuración de productos canjeables. |
 | `POST` | `/api/admin/rewards` | Crea o actualiza coste, stock, límite y estado de un canje. |
 | `DELETE` | `/api/admin/rewards/{rewardId}` | Desactiva un producto canjeable. |
+| `GET` | `/api/admin/customers` | Busca clientes y muestra su saldo de puntos. |
+| `GET` | `/api/admin/customers/{customerId}/points` | Devuelve el historial de movimientos de puntos. |
+| `POST` | `/api/admin/customers/{customerId}/points/adjust` | Ajusta puntos manualmente con motivo y auditoría. |
+| `GET` | `/api/admin/shifts` | Lista turnos con responsable, pedidos, ventas y diferencia de caja. |
+| `GET` | `/api/admin/kitchen/dashboard` | Entrega rendimiento de cocina por turno, canal y producto. |
+| `PUT` | `/api/admin/kitchen/target` | Configura el objetivo de minutos de preparación. |
 
 El cliente puede enviar los métodos `efectivo`, `tarjeta` o `edenred`. El backend valida productos, variantes, pagos y canjes contra PostgreSQL y nunca acepta el precio ni el coste en puntos enviados por la caja. Al confirmar un pedido con canjes, bloquea la cuenta de fidelización dentro de la transacción, vuelve a validar el saldo, descuenta los puntos, registra el movimiento y reduce el stock de canje. Los ejemplos completos están en `src/KameronSushi.Api/KameronSushi.Api.http`.
 
-La creación de un pedido local exige un turno abierto y guarda su identificador en `pedidos.id_turno`. La migración `003_cash_shift_accounting` agrega el fondo inicial, el arqueo y `movimientos_caja`. Mientras no exista autenticación de operadores, la apertura usa el usuario técnico `Caja local`; cuando se implemente el acceso de cajeros debe reemplazarse por el usuario autenticado.
+La creación de un pedido local exige un turno abierto y guarda su identificador en `pedidos.id_turno`. Las migraciones automáticas también incorporan el orden del catálogo, la configuración administrativa de promociones y el objetivo de tiempo de cocina. Mientras no exista autenticación de operadores, la apertura usa el usuario técnico `Caja local`; cuando se implemente el acceso de cajeros debe reemplazarse por el usuario autenticado.
 
 Las rutas de administración todavía no tienen autenticación. Antes de usarlas fuera de una red controlada debe agregarse el inicio de sesión y la autorización del rol administrador.
 

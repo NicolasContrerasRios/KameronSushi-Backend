@@ -117,6 +117,99 @@ public sealed class PostgresAdminStore(NpgsqlDataSource dataSource) : IAdminStor
         return result;
     }
 
+    public async Task<IReadOnlyList<AdminPromotion>> GetPromotionsAsync(CancellationToken cancellationToken)
+    {
+        await using var command=dataSource.CreateCommand("""
+            SELECT a.id_promocion,a.id_producto,p.nombre_producto,p.precio,a.productos_incluidos,a.salsas_incluidas,
+                   a.vigente_desde,a.vigente_hasta,a.habilitada_retiro,a.habilitada_delivery,a.activa
+              FROM promociones_admin a JOIN productos p ON p.id_producto=a.id_producto ORDER BY p.nombre_producto;
+            """);await using var reader=await command.ExecuteReaderAsync(cancellationToken);var result=new List<AdminPromotion>();while(await reader.ReadAsync(cancellationToken))result.Add(ReadPromotion(reader));return result;
+    }
+
+    public async Task<IReadOnlyList<AdminCustomer>> GetCustomersAsync(string? search,CancellationToken cancellationToken)
+    {
+        await using var command=dataSource.CreateCommand("""
+            SELECT c.id_cliente,c.nombre,c.telefono,c.email,COALESCE(cf.saldo_puntos,0),COALESCE(cf.puntos_acumulados,0),COALESCE(cf.puntos_canjeados,0),COALESCE(cf.estado,'activa')
+              FROM clientes c LEFT JOIN cuentas_fidelizacion cf ON cf.id_cliente=c.id_cliente
+             WHERE @search='' OR c.nombre ILIKE '%'||@search||'%' OR c.telefono ILIKE '%'||@search||'%'
+             ORDER BY c.nombre LIMIT 200;
+            """);command.Parameters.AddWithValue("search",search?.Trim()??string.Empty);await using var reader=await command.ExecuteReaderAsync(cancellationToken);var result=new List<AdminCustomer>();while(await reader.ReadAsync(cancellationToken))result.Add(ReadCustomer(reader));return result;
+    }
+    public async Task<IReadOnlyList<AdminPointMovement>> GetCustomerPointMovementsAsync(long customerId,CancellationToken cancellationToken)
+    {
+        await using var command=dataSource.CreateCommand("""
+            SELECT m.id_movimiento,m.tipo,m.puntos,m.saldo_anterior,m.saldo_resultante,m.descripcion,m.creado_en
+              FROM movimiento_puntos m JOIN cuentas_fidelizacion cf ON cf.id_cuenta=m.id_cuenta
+             WHERE cf.id_cliente=@customer ORDER BY m.creado_en DESC LIMIT 200;
+            """);command.Parameters.AddWithValue("customer",customerId);await using var reader=await command.ExecuteReaderAsync(cancellationToken);var result=new List<AdminPointMovement>();while(await reader.ReadAsync(cancellationToken))result.Add(new(reader.GetInt64(0),reader.GetString(1),reader.GetInt32(2),reader.GetInt32(3),reader.GetInt32(4),reader.IsDBNull(5)?null:reader.GetString(5),reader.GetFieldValue<DateTimeOffset>(6)));return result;
+    }
+    public async Task<AdminCustomer?> AdjustCustomerPointsAsync(long customerId,AdjustCustomerPoints adjustment,CancellationToken cancellationToken)
+    {
+        if(adjustment.Points==0)throw new ArgumentException("El ajuste no puede ser cero.");if(string.IsNullOrWhiteSpace(adjustment.Reason))throw new ArgumentException("Escribe el motivo del ajuste.");
+        await using var connection=await dataSource.OpenConnectionAsync(cancellationToken);await using var transaction=await connection.BeginTransactionAsync(cancellationToken);
+        await using(var ensure=connection.CreateCommand()){ensure.Transaction=transaction;ensure.CommandText="INSERT INTO cuentas_fidelizacion(id_cliente) SELECT @customer WHERE EXISTS(SELECT 1 FROM clientes WHERE id_cliente=@customer) ON CONFLICT(id_cliente) DO NOTHING;";ensure.Parameters.AddWithValue("customer",customerId);await ensure.ExecuteNonQueryAsync(cancellationToken);}
+        long account;int previous;
+        await using(var lockCommand=connection.CreateCommand()){lockCommand.Transaction=transaction;lockCommand.CommandText="SELECT id_cuenta,saldo_puntos FROM cuentas_fidelizacion WHERE id_cliente=@customer FOR UPDATE;";lockCommand.Parameters.AddWithValue("customer",customerId);await using var reader=await lockCommand.ExecuteReaderAsync(cancellationToken);if(!await reader.ReadAsync(cancellationToken))return null;account=reader.GetInt64(0);previous=reader.GetInt32(1);}
+        var resulting=previous+adjustment.Points;if(resulting<0)throw new ArgumentException("El ajuste dejaría el saldo de puntos negativo.");
+        await using(var update=connection.CreateCommand()){update.Transaction=transaction;update.CommandText="UPDATE cuentas_fidelizacion SET saldo_puntos=@balance,actualizado_en=NOW() WHERE id_cuenta=@account; INSERT INTO movimiento_puntos(id_cuenta,tipo,puntos,saldo_anterior,saldo_resultante,descripcion) VALUES(@account,'ajuste',@points,@previous,@balance,@reason);";update.Parameters.AddWithValue("balance",resulting);update.Parameters.AddWithValue("account",account);update.Parameters.AddWithValue("points",adjustment.Points);update.Parameters.AddWithValue("previous",previous);update.Parameters.AddWithValue("reason",adjustment.Reason.Trim());await update.ExecuteNonQueryAsync(cancellationToken);}
+        await transaction.CommitAsync(cancellationToken);return (await GetCustomersAsync(null,cancellationToken)).First(value=>value.CustomerId==customerId);
+    }
+    private static AdminCustomer ReadCustomer(NpgsqlDataReader reader)=>new(reader.GetInt64(0),reader.GetString(1),reader.GetString(2),reader.IsDBNull(3)?null:reader.GetString(3),reader.GetInt32(4),reader.GetInt32(5),reader.GetInt32(6),reader.GetString(7));
+
+    public async Task<IReadOnlyList<AdminShiftSummary>> GetShiftsAsync(int limit,CancellationToken cancellationToken)
+    {
+        await using var command=dataSource.CreateCommand("""
+            SELECT t.id_turno,t.estado,t.abierto_en,t.cerrado_en,u.nombre,
+                   (SELECT COUNT(*) FROM pedidos p WHERE p.id_turno=t.id_turno AND p.estado<>'cancelado'),
+                   (SELECT COALESCE(SUM(p.total),0) FROM pedidos p WHERE p.id_turno=t.id_turno AND p.estado<>'cancelado'),
+                   t.diferencia_efectivo
+              FROM turnos t JOIN usuarios u ON u.id_usuario=t.id_usuario_apertura
+             ORDER BY t.abierto_en DESC LIMIT @limit;
+            """);command.Parameters.AddWithValue("limit",limit);await using var reader=await command.ExecuteReaderAsync(cancellationToken);var result=new List<AdminShiftSummary>();while(await reader.ReadAsync(cancellationToken))result.Add(new(reader.GetInt64(0),reader.GetString(1),reader.GetFieldValue<DateTimeOffset>(2),reader.IsDBNull(3)?null:reader.GetFieldValue<DateTimeOffset>(3),reader.GetString(4),Convert.ToInt32(reader.GetInt64(5)),reader.GetDecimal(6),reader.IsDBNull(7)?null:reader.GetDecimal(7)));return result;
+    }
+
+    public async Task<AdminKitchenDashboard> GetKitchenDashboardAsync(long? shiftId,CancellationToken cancellationToken)
+    {
+        await using var connection=await dataSource.OpenConnectionAsync(cancellationToken);int target;
+        await using(var setting=connection.CreateCommand()){setting.CommandText="SELECT valor::integer FROM configuracion_operativa WHERE clave='tiempo_objetivo_cocina_minutos';";target=Convert.ToInt32(await setting.ExecuteScalarAsync(cancellationToken)??20);}
+        if(shiftId is null){await using var current=connection.CreateCommand();current.CommandText="SELECT id_turno FROM turnos WHERE estado='abierto' ORDER BY abierto_en DESC LIMIT 1;";var value=await current.ExecuteScalarAsync(cancellationToken);shiftId=value is null?null:Convert.ToInt64(value);}
+        var metrics=new List<AdminKitchenMetric>();var products=new List<AdminKitchenProductMetric>();if(shiftId is not null)
+        {
+            await using(var command=connection.CreateCommand()){command.CommandText="""
+                SELECT tipo_entrega,
+                       COUNT(*) FILTER(WHERE estado='en_preparacion'),
+                       COUNT(*) FILTER(WHERE listo_en IS NOT NULL),
+                       AVG(EXTRACT(EPOCH FROM (listo_en-creado_en))/60.0) FILTER(WHERE listo_en IS NOT NULL),
+                       MAX(EXTRACT(EPOCH FROM (listo_en-creado_en))/60.0) FILTER(WHERE listo_en IS NOT NULL),
+                       COUNT(*) FILTER(WHERE listo_en IS NOT NULL AND listo_en-creado_en > make_interval(mins=>@target))
+                  FROM pedidos WHERE id_turno=@shift AND estado<>'cancelado' GROUP BY tipo_entrega ORDER BY tipo_entrega;
+                """;command.Parameters.AddWithValue("shift",shiftId.Value);command.Parameters.AddWithValue("target",target);await using var reader=await command.ExecuteReaderAsync(cancellationToken);while(await reader.ReadAsync(cancellationToken))metrics.Add(new(reader.GetString(0),Convert.ToInt32(reader.GetInt64(1)),Convert.ToInt32(reader.GetInt64(2)),reader.IsDBNull(3)?null:reader.GetDouble(3),reader.IsDBNull(4)?null:reader.GetDouble(4),Convert.ToInt32(reader.GetInt64(5))));}
+            await using(var command=connection.CreateCommand()){command.CommandText="""
+                SELECT d.nombre_producto,COUNT(DISTINCT p.id_pedido),AVG(EXTRACT(EPOCH FROM(p.listo_en-p.creado_en))/60.0)
+                  FROM pedidos p JOIN detalle_pedidos d ON d.id_pedido=p.id_pedido
+                 WHERE p.id_turno=@shift AND p.listo_en IS NOT NULL GROUP BY d.nombre_producto ORDER BY 3 DESC LIMIT 10;
+                """;command.Parameters.AddWithValue("shift",shiftId.Value);await using var reader=await command.ExecuteReaderAsync(cancellationToken);while(await reader.ReadAsync(cancellationToken))products.Add(new(reader.GetString(0),Convert.ToInt32(reader.GetInt64(1)),reader.GetDouble(2)));}
+        }
+        return new(shiftId,target,metrics,products);
+    }
+    public async Task<int> SaveKitchenTargetAsync(int targetMinutes,CancellationToken cancellationToken){if(targetMinutes is<1 or>240)throw new ArgumentException("El objetivo debe estar entre 1 y 240 minutos.");await using var command=dataSource.CreateCommand("INSERT INTO configuracion_operativa(clave,valor) VALUES('tiempo_objetivo_cocina_minutos',@value) ON CONFLICT(clave) DO UPDATE SET valor=EXCLUDED.valor,actualizado_en=NOW();");command.Parameters.AddWithValue("value",targetMinutes.ToString(System.Globalization.CultureInfo.InvariantCulture));await command.ExecuteNonQueryAsync(cancellationToken);return targetMinutes;}
+
+    public async Task<AdminPromotion> SavePromotionAsync(long? promotionId,SaveAdminPromotion promotion,CancellationToken cancellationToken)
+    {
+        if(promotion.ProductId<=0)throw new ArgumentException("Selecciona el producto de la promoción.");if(promotion.IncludedSauces<0)throw new ArgumentException("La cantidad de salsas no puede ser negativa.");if(!promotion.PickupEnabled&&!promotion.DeliveryEnabled)throw new ArgumentException("Habilita al menos un tipo de entrega.");if(promotion.StartsAt is not null&&promotion.EndsAt<=promotion.StartsAt)throw new ArgumentException("El término debe ser posterior al inicio.");
+        await using var command=dataSource.CreateCommand(promotionId is null?"""
+            INSERT INTO promociones_admin(id_producto,productos_incluidos,salsas_incluidas,vigente_desde,vigente_hasta,habilitada_retiro,habilitada_delivery,activa)
+            VALUES(@product,@included,@sauces,@starts,@ends,@pickup,@delivery,@active) RETURNING id_promocion;
+            """:"""
+            UPDATE promociones_admin SET id_producto=@product,productos_incluidos=@included,salsas_incluidas=@sauces,vigente_desde=@starts,vigente_hasta=@ends,habilitada_retiro=@pickup,habilitada_delivery=@delivery,activa=@active,actualizado_en=NOW()
+             WHERE id_promocion=@id RETURNING id_promocion;
+            """);command.Parameters.AddWithValue("product",promotion.ProductId);command.Parameters.Add("included",NpgsqlTypes.NpgsqlDbType.Text).Value=string.IsNullOrWhiteSpace(promotion.IncludedProducts)?DBNull.Value:promotion.IncludedProducts.Trim();command.Parameters.AddWithValue("sauces",promotion.IncludedSauces);command.Parameters.Add("starts",NpgsqlTypes.NpgsqlDbType.TimestampTz).Value=(object?)promotion.StartsAt??DBNull.Value;command.Parameters.Add("ends",NpgsqlTypes.NpgsqlDbType.TimestampTz).Value=(object?)promotion.EndsAt??DBNull.Value;command.Parameters.AddWithValue("pickup",promotion.PickupEnabled);command.Parameters.AddWithValue("delivery",promotion.DeliveryEnabled);command.Parameters.AddWithValue("active",promotion.Active);if(promotionId is not null)command.Parameters.AddWithValue("id",promotionId.Value);
+        try{var id=Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken)??throw new ArgumentException("La promoción no existe."));return (await GetPromotionAsync(id,cancellationToken))!;}catch(PostgresException exception)when(exception.SqlState==PostgresErrorCodes.UniqueViolation){throw new ArgumentException("Ese producto ya tiene una promoción configurada.");}
+    }
+
+    private async Task<AdminPromotion?> GetPromotionAsync(long id,CancellationToken token){await using var command=dataSource.CreateCommand("SELECT a.id_promocion,a.id_producto,p.nombre_producto,p.precio,a.productos_incluidos,a.salsas_incluidas,a.vigente_desde,a.vigente_hasta,a.habilitada_retiro,a.habilitada_delivery,a.activa FROM promociones_admin a JOIN productos p ON p.id_producto=a.id_producto WHERE a.id_promocion=@id;");command.Parameters.AddWithValue("id",id);await using var reader=await command.ExecuteReaderAsync(token);return await reader.ReadAsync(token)?ReadPromotion(reader):null;}
+    private static AdminPromotion ReadPromotion(NpgsqlDataReader reader)=>new(reader.GetInt64(0),reader.GetInt64(1),reader.GetString(2),reader.GetDecimal(3),reader.IsDBNull(4)?null:reader.GetString(4),reader.GetInt32(5),reader.IsDBNull(6)?null:reader.GetFieldValue<DateTimeOffset>(6),reader.IsDBNull(7)?null:reader.GetFieldValue<DateTimeOffset>(7),reader.GetBoolean(8),reader.GetBoolean(9),reader.GetBoolean(10));
+
     public async Task<IReadOnlyList<AdminWrapper>> GetWrappersAsync(CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand("SELECT id_envoltura, nombre, activa FROM envolturas ORDER BY nombre;");

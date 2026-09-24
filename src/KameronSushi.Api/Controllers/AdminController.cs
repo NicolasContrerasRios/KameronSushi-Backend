@@ -97,6 +97,35 @@ public sealed class AdminController(IAdminStore store) : ControllerBase
         catch (ArgumentException exception) { return BadRequestProblem(exception); }
     }
 
+    [HttpGet("promotions")]
+    public async Task<ActionResult<IReadOnlyList<AdminPromotion>>> GetPromotions(CancellationToken token) =>
+        Ok(await store.GetPromotionsAsync(token));
+
+    [HttpPost("promotions")]
+    public Task<ActionResult<AdminPromotion>> CreatePromotion(SaveAdminPromotion promotion, CancellationToken token) =>
+        SavePromotion(null, promotion, token);
+
+    [HttpPut("promotions/{promotionId:long}")]
+    public Task<ActionResult<AdminPromotion>> UpdatePromotion(long promotionId, SaveAdminPromotion promotion, CancellationToken token) =>
+        SavePromotion(promotionId, promotion, token);
+
+    [HttpGet("customers")]
+    public async Task<ActionResult<IReadOnlyList<AdminCustomer>>> GetCustomers([FromQuery]string? search,CancellationToken token)=>Ok(await store.GetCustomersAsync(search,token));
+    [HttpGet("customers/{customerId:long}/points")]
+    public async Task<ActionResult<IReadOnlyList<AdminPointMovement>>> GetCustomerPointMovements(long customerId,CancellationToken token)=>Ok(await store.GetCustomerPointMovementsAsync(customerId,token));
+    [HttpPost("customers/{customerId:long}/points/adjust")]
+    public async Task<ActionResult<AdminCustomer>> AdjustCustomerPoints(long customerId,AdjustCustomerPoints adjustment,CancellationToken token)
+    {try{var result=await store.AdjustCustomerPointsAsync(customerId,adjustment,token);return result is null?NotFound():Ok(result);}catch(ArgumentException exception){return BadRequestProblem(exception);}}
+
+    [HttpGet("shifts")]
+    public async Task<ActionResult<IReadOnlyList<AdminShiftSummary>>> GetShifts([FromQuery]int limit=100,CancellationToken token=default)
+    {if(limit is<1 or>500)return BadRequest();return Ok(await store.GetShiftsAsync(limit,token));}
+    [HttpGet("kitchen/dashboard")]
+    public async Task<ActionResult<AdminKitchenDashboard>> GetKitchenDashboard([FromQuery]long? shiftId,CancellationToken token)=>Ok(await store.GetKitchenDashboardAsync(shiftId,token));
+    [HttpPut("kitchen/target")]
+    public async Task<ActionResult<int>> SaveKitchenTarget(SaveKitchenTarget request,CancellationToken token)
+    {try{return Ok(await store.SaveKitchenTargetAsync(request.TargetMinutes,token));}catch(ArgumentException exception){return BadRequestProblem(exception);}}
+
     [HttpGet("rewards")]
     public async Task<ActionResult<IReadOnlyList<AdminRewardProduct>>> GetRewards(CancellationToken cancellationToken) =>
         Ok(await store.GetRewardsAsync(cancellationToken));
@@ -139,6 +168,12 @@ public sealed class AdminController(IAdminStore store) : ControllerBase
     private async Task<ActionResult<AdminSauce>> SaveSauce(long? id, SaveAdminSauce sauce, CancellationToken token)
     {
         try { return Ok(await store.SaveSauceAsync(id, sauce, token)); }
+        catch (ArgumentException exception) { return BadRequestProblem(exception); }
+    }
+
+    private async Task<ActionResult<AdminPromotion>> SavePromotion(long? id, SaveAdminPromotion promotion, CancellationToken token)
+    {
+        try { return Ok(await store.SavePromotionAsync(id, promotion, token)); }
         catch (ArgumentException exception) { return BadRequestProblem(exception); }
     }
 }

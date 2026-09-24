@@ -21,7 +21,12 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                        p.precio, p.disponible, p.requiere_configuracion
                   FROM productos p
                   JOIN categorias c ON c.id_categoria = p.id_categoria
+                  LEFT JOIN promociones_admin pa ON pa.id_producto = p.id_producto
                  WHERE p.activo = TRUE AND c.activa = TRUE
+                   AND (pa.id_promocion IS NULL OR (
+                       pa.activa = TRUE AND pa.habilitada_retiro = TRUE
+                       AND (pa.vigente_desde IS NULL OR pa.vigente_desde <= NOW())
+                       AND (pa.vigente_hasta IS NULL OR pa.vigente_hasta > NOW())))
                  ORDER BY c.orden, p.orden, p.nombre_producto;
                 """;
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);

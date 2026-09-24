@@ -15,6 +15,14 @@ public interface IAdminStore
     Task<AdminSauce> SaveSauceAsync(long? sauceId, SaveAdminSauce sauce, CancellationToken cancellationToken);
     Task<AdminProductConfiguration?> GetProductConfigurationAsync(long productId, CancellationToken cancellationToken);
     Task<AdminProductConfiguration?> SaveProductConfigurationAsync(long productId, SaveAdminProductConfiguration configuration, CancellationToken cancellationToken);
+    Task<IReadOnlyList<AdminPromotion>> GetPromotionsAsync(CancellationToken cancellationToken);
+    Task<AdminPromotion> SavePromotionAsync(long? promotionId, SaveAdminPromotion promotion, CancellationToken cancellationToken);
+    Task<IReadOnlyList<AdminCustomer>> GetCustomersAsync(string? search, CancellationToken cancellationToken);
+    Task<IReadOnlyList<AdminPointMovement>> GetCustomerPointMovementsAsync(long customerId, CancellationToken cancellationToken);
+    Task<AdminCustomer?> AdjustCustomerPointsAsync(long customerId, AdjustCustomerPoints adjustment, CancellationToken cancellationToken);
+    Task<IReadOnlyList<AdminShiftSummary>> GetShiftsAsync(int limit, CancellationToken cancellationToken);
+    Task<AdminKitchenDashboard> GetKitchenDashboardAsync(long? shiftId, CancellationToken cancellationToken);
+    Task<int> SaveKitchenTargetAsync(int targetMinutes, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminRewardProduct>> GetRewardsAsync(CancellationToken cancellationToken);
     Task<AdminRewardProduct> SaveRewardAsync(SaveAdminRewardProduct reward, CancellationToken cancellationToken);
     Task<bool> DisableRewardAsync(long rewardProductId, CancellationToken cancellationToken);
