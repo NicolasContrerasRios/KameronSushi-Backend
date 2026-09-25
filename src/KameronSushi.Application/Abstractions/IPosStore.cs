@@ -12,6 +12,9 @@ public interface IPosStore
     Task<IReadOnlyList<KitchenOrderSummary>> GetKitchenOrdersAsync(CancellationToken cancellationToken);
     Task<IReadOnlyList<KitchenPerformanceSummary>> GetKitchenPerformanceAsync(CancellationToken cancellationToken);
     Task<bool> MarkOrderReadyAsync(long orderId, CancellationToken cancellationToken);
+    Task<KitchenPrintJob?> ClaimKitchenPrintJobAsync(string workerId, CancellationToken cancellationToken);
+    Task<bool> CompleteKitchenPrintJobAsync(Guid claimToken, string workerId, CancellationToken cancellationToken);
+    Task<bool> FailKitchenPrintJobAsync(Guid claimToken, string workerId, string error, CancellationToken cancellationToken);
     Task<CashShift?> GetCurrentShiftAsync(CancellationToken cancellationToken);
     Task<CashShift> OpenShiftAsync(decimal openingAmount, CancellationToken cancellationToken);
     Task<CashShiftReport?> GetShiftReportAsync(long shiftId, CancellationToken cancellationToken);

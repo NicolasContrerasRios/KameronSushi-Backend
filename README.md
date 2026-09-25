@@ -154,6 +154,9 @@ Al iniciar, el backend registra y aplica sus migraciones pendientes en la tabla 
 | `GET` | `/api/kitchen/orders` | Lista pedidos confirmados o en preparación para cocina. |
 | `GET` | `/api/kitchen/orders/performance` | Calcula por tipo de entrega el tiempo promedio hasta quedar listo dentro del turno abierto. |
 | `PATCH` | `/api/kitchen/orders/{orderId}/ready` | Marca un pedido activo como listo. |
+| `POST` | `/api/kitchen/print-jobs/claim` | Reserva atómicamente la siguiente comanda pendiente para un equipo. |
+| `POST` | `/api/kitchen/print-jobs/{claimToken}/complete` | Confirma que la comanda reservada fue enviada a la impresora. |
+| `POST` | `/api/kitchen/print-jobs/{claimToken}/fail` | Libera la reserva y programa un reintento después de un fallo. |
 | `GET/POST/PUT` | `/api/admin/categories` | Lista, crea y edita categorías, estado y orden de exhibición. |
 | `GET/POST/PUT` | `/api/admin/products` | Lista, crea y edita productos, precios, disponibilidad, orden y configuración. |
 | `GET/POST/PUT` | `/api/admin/wrappers` | Administra envolturas. |
@@ -175,6 +178,8 @@ El cliente puede enviar los métodos `efectivo`, `tarjeta` o `edenred`. El backe
 La creación de un pedido local exige un turno abierto y guarda su identificador en `pedidos.id_turno`. Las migraciones automáticas también incorporan el orden del catálogo, la configuración administrativa de promociones y el objetivo de tiempo de cocina. Mientras no exista autenticación de operadores, la apertura usa el usuario técnico `Caja local`; cuando se implemente el acceso de cajeros debe reemplazarse por el usuario autenticado.
 
 Las rutas de administración todavía no tienen autenticación. Antes de usarlas fuera de una red controlada debe agregarse el inicio de sesión y la autorización del rol administrador.
+
+La migración `007_kitchen_print_queue` agrega el estado de impresión a `pedidos`. Un trigger en PostgreSQL encola todos los pedidos nuevos que entren en estado `confirmado` o `en_preparacion`, sin depender de que provengan de caja, WhatsApp o delivery. La reserva usa bloqueo `FOR UPDATE SKIP LOCKED`, un token único y un arrendamiento temporal para que varios computadores de cocina no impriman simultáneamente la misma comanda. En la aplicación de escritorio se activa desde **Administración > Impresora > Imprimir comandas de cocina automáticamente**.
 
 Para desarrollo con HTTPS:
 

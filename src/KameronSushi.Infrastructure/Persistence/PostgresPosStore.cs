@@ -557,6 +557,155 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         return performance;
     }
 
+    public async Task<KitchenPrintJob?> ClaimKitchenPrintJobAsync(
+        string workerId,
+        CancellationToken cancellationToken)
+    {
+        var normalizedWorkerId = NormalizePrintWorkerId(workerId);
+        var claimToken = Guid.NewGuid();
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+
+        PrintJobHeader? header = null;
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                SELECT p.id_pedido, p.tipo_entrega, p.canal_origen, p.creado_en,
+                       COALESCE(c.nombre, e.nombre_receptor),
+                       COALESCE(c.telefono, e.telefono_receptor),
+                       CASE WHEN e.id_entrega IS NULL THEN NULL ELSE
+                           CONCAT_WS(', ', CONCAT_WS(' ', e.calle, e.numero),
+                               NULLIF(e.departamento, ''), e.comuna, NULLIF(e.referencia, ''))
+                       END
+                  FROM pedidos p
+                  LEFT JOIN clientes c ON c.id_cliente = p.id_cliente
+                  LEFT JOIN entregas_pedido e ON e.id_pedido = p.id_pedido
+                 WHERE p.pendiente_impresion = TRUE
+                   AND p.impreso_en IS NULL
+                   AND p.estado IN ('confirmado', 'en_preparacion')
+                   AND p.impresion_reintentar_en <= NOW()
+                   AND (p.impresion_tomada_en IS NULL OR p.impresion_tomada_en < NOW() - INTERVAL '2 minutes')
+                 ORDER BY p.creado_en, p.id_pedido
+                 LIMIT 1
+                 FOR UPDATE OF p SKIP LOCKED;
+                """;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                header = new PrintJobHeader(
+                    reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
+                    reader.GetFieldValue<DateTimeOffset>(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6));
+            }
+        }
+
+        if (header is null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return null;
+        }
+
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                UPDATE pedidos
+                   SET impresion_token = @claim_token,
+                       impresion_tomada_en = NOW(),
+                       impresion_tomada_por = @worker_id,
+                       intentos_impresion = intentos_impresion + 1,
+                       ultimo_error_impresion = NULL
+                 WHERE id_pedido = @order_id;
+                """;
+            command.Parameters.AddWithValue("claim_token", claimToken);
+            command.Parameters.AddWithValue("worker_id", normalizedWorkerId);
+            command.Parameters.AddWithValue("order_id", header.OrderId);
+            await command.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var items = new List<KitchenPrintItem>();
+        await using (var command = connection.CreateCommand())
+        {
+            command.Transaction = transaction;
+            command.CommandText = """
+                SELECT cantidad, nombre_producto, observaciones
+                  FROM detalle_pedidos
+                 WHERE id_pedido = @order_id
+                 ORDER BY id_detalle;
+                """;
+            command.Parameters.AddWithValue("order_id", header.OrderId);
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                items.Add(new KitchenPrintItem(
+                    reader.GetInt32(0), reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2)));
+            }
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return new KitchenPrintJob(
+            claimToken, header.OrderId, header.DeliveryType, header.Channel, header.CreatedAt,
+            header.CustomerName, header.CustomerPhone, header.DeliveryAddress, items);
+    }
+
+    public async Task<bool> CompleteKitchenPrintJobAsync(
+        Guid claimToken,
+        string workerId,
+        CancellationToken cancellationToken)
+    {
+        var normalizedWorkerId = NormalizePrintWorkerId(workerId);
+        await using var command = dataSource.CreateCommand("""
+            UPDATE pedidos
+               SET pendiente_impresion = FALSE,
+                   impreso_en = NOW(),
+                   impreso_por = @worker_id,
+                   impresion_token = NULL,
+                   impresion_tomada_en = NULL,
+                   impresion_tomada_por = NULL,
+                   ultimo_error_impresion = NULL
+             WHERE impresion_token = @claim_token
+               AND impresion_tomada_por = @worker_id
+               AND pendiente_impresion = TRUE
+               AND impreso_en IS NULL;
+            """);
+        command.Parameters.AddWithValue("claim_token", claimToken);
+        command.Parameters.AddWithValue("worker_id", normalizedWorkerId);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
+    public async Task<bool> FailKitchenPrintJobAsync(
+        Guid claimToken,
+        string workerId,
+        string error,
+        CancellationToken cancellationToken)
+    {
+        var normalizedWorkerId = NormalizePrintWorkerId(workerId);
+        if (string.IsNullOrWhiteSpace(error)) throw new ArgumentException("Indica el motivo del fallo de impresión.");
+        var normalizedError = error.Trim();
+        if (normalizedError.Length > 500) normalizedError = normalizedError[..500];
+
+        await using var command = dataSource.CreateCommand("""
+            UPDATE pedidos
+               SET impresion_token = NULL,
+                   impresion_tomada_en = NULL,
+                   impresion_tomada_por = NULL,
+                   impresion_reintentar_en = NOW() + INTERVAL '1 minute',
+                   ultimo_error_impresion = @error
+             WHERE impresion_token = @claim_token
+               AND impresion_tomada_por = @worker_id
+               AND pendiente_impresion = TRUE
+               AND impreso_en IS NULL;
+            """);
+        command.Parameters.AddWithValue("claim_token", claimToken);
+        command.Parameters.AddWithValue("worker_id", normalizedWorkerId);
+        command.Parameters.AddWithValue("error", normalizedError);
+        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+    }
+
     public async Task<CashShift?> GetCurrentShiftAsync(CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand("""
@@ -914,6 +1063,14 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         _ => throw new ArgumentException($"El método de pago '{method}' no es válido.")
     };
 
+    private static string NormalizePrintWorkerId(string workerId)
+    {
+        if (string.IsNullOrWhiteSpace(workerId)) throw new ArgumentException("El equipo de impresión es obligatorio.");
+        var normalized = workerId.Trim();
+        if (normalized.Length > 150) throw new ArgumentException("El identificador del equipo no puede superar 150 caracteres.");
+        return normalized;
+    }
+
     private static async Task<bool> CustomerExistsAsync(
         NpgsqlConnection connection, NpgsqlTransaction transaction, long customerId,
         CancellationToken cancellationToken)
@@ -1017,6 +1174,9 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
     private sealed record NormalizedPayment(string Method, decimal Amount);
     private sealed record LoyaltyAccount(long AccountId, int Points);
     private sealed record ValidatedReward(long RewardProductId, long ProductId, string Name, int PointsCost, int Quantity);
+    private sealed record PrintJobHeader(
+        long OrderId, string DeliveryType, string Channel, DateTimeOffset CreatedAt,
+        string? CustomerName, string? CustomerPhone, string? DeliveryAddress);
     private sealed record PosOrderHeader(
         long Id, string Status, string DeliveryType, string Channel,
         decimal Subtotal, decimal Discount, decimal ShippingCost, decimal Total,

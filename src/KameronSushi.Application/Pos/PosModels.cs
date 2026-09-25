@@ -119,6 +119,23 @@ public sealed record KitchenPerformanceSummary(
     int CompletedOrders,
     double? AverageReadyMinutes);
 
+public sealed record ClaimKitchenPrintJob(string WorkerId);
+public sealed record CompleteKitchenPrintJob(string WorkerId);
+public sealed record FailKitchenPrintJob(string WorkerId, string Error);
+
+public sealed record KitchenPrintJob(
+    Guid ClaimToken,
+    long OrderId,
+    string DeliveryType,
+    string Channel,
+    DateTimeOffset CreatedAt,
+    string? CustomerName,
+    string? CustomerPhone,
+    string? DeliveryAddress,
+    IReadOnlyList<KitchenPrintItem> Items);
+
+public sealed record KitchenPrintItem(int Quantity, string Name, string? Details);
+
 public sealed record CashShift(
     long ShiftId,
     string Status,

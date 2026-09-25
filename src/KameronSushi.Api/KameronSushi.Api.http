@@ -111,6 +111,34 @@ Accept: application/json
 
 ###
 
+POST {{KameronSushi.Api_HostAddress}}/api/kitchen/print-jobs/claim
+Content-Type: application/json
+
+{
+  "workerId": "COCINA-01"
+}
+
+### Reemplazar el token por claimToken devuelto al reservar la comanda
+
+POST {{KameronSushi.Api_HostAddress}}/api/kitchen/print-jobs/00000000-0000-0000-0000-000000000000/complete
+Content-Type: application/json
+
+{
+  "workerId": "COCINA-01"
+}
+
+###
+
+POST {{KameronSushi.Api_HostAddress}}/api/kitchen/print-jobs/00000000-0000-0000-0000-000000000000/fail
+Content-Type: application/json
+
+{
+  "workerId": "COCINA-01",
+  "error": "La impresora no está disponible"
+}
+
+###
+
 PATCH {{KameronSushi.Api_HostAddress}}/api/kitchen/orders/1/ready
 Accept: application/json
 
