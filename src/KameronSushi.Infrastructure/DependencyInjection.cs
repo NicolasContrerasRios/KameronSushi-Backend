@@ -1,5 +1,6 @@
 using KameronSushi.Application.Abstractions;
 using KameronSushi.Infrastructure.Configuration;
+using KameronSushi.Infrastructure.Auth;
 using KameronSushi.Infrastructure.Persistence;
 using KameronSushi.Infrastructure.WhatsApp;
 using Microsoft.Extensions.Configuration;
@@ -15,6 +16,7 @@ public static class DependencyInjection
     {
         services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
         services.Configure<WhatsAppOptions>(configuration.GetSection(WhatsAppOptions.SectionName));
+        services.Configure<AuthOptions>(configuration.GetSection(AuthOptions.SectionName));
 
         services.AddSingleton(provider =>
         {
@@ -36,6 +38,8 @@ public static class DependencyInjection
         services.AddScoped<IWhatsAppStore, PostgresWhatsAppStore>();
         services.AddScoped<IPosStore, PostgresPosStore>();
         services.AddScoped<IAdminStore, PostgresAdminStore>();
+        services.AddScoped<IAuthStore, PostgresAuthStore>();
+        services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddSingleton<IWebhookSignatureValidator, MetaWebhookSignatureValidator>();
         services.AddHttpClient<IWhatsAppMessageSender, MetaWhatsAppMessageSender>();
         return services;

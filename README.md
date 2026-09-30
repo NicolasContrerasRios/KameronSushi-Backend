@@ -42,7 +42,7 @@ Las carpetas vacías contienen `.gitkeep` para conservarlas en Git.
 
 Las dependencias apuntan hacia el núcleo. Application y Domain no deben referenciar Infrastructure ni Api. Los controladores delegarán las operaciones a Application; las implementaciones concretas se registrarán en el contenedor de inyección de dependencias desde la API. Infrastructure puede acceder a Domain mediante la referencia transitiva de Application.
 
-La solución ya implementa persistencia PostgreSQL, el flujo inicial del bot de WhatsApp y las primeras operaciones para caja y cocina. La autenticación de operadores todavía está pendiente y debe agregarse antes de exponer estas rutas en producción.
+La solución implementa persistencia PostgreSQL, el flujo inicial del bot de WhatsApp, caja, cocina y autenticación de operadores mediante sesiones revocables. Las rutas se autorizan según los roles `administrador`, `caja` y `cocina`.
 
 ## Configuración local sin filtrar secretos
 
@@ -56,6 +56,7 @@ dotnet user-secrets set "Database:Password" "CONTRASEÑA_DE_RENDER"
 dotnet user-secrets set "WhatsApp:AccessToken" "TOKEN_DE_ACCESO_DE_META"
 dotnet user-secrets set "WhatsApp:VerifyToken" "UN_TOKEN_LARGO_CREADO_POR_TI"
 dotnet user-secrets set "WhatsApp:AppSecret" "APP_SECRET_DE_META"
+dotnet user-secrets set "Auth:BootstrapKey" "UNA_CLAVE_ALEATORIA_LARGA"
 ```
 
 Los valores no deben copiarse a `appsettings.json`, archivos `.http`, capturas ni commits. `.env` también está ignorado, pero Secret Manager es la opción usada por este proyecto para desarrollo. Puedes revisar únicamente los nombres configurados con `dotnet user-secrets list`; ese comando también imprime los valores, así que no compartas su salida.
@@ -70,7 +71,12 @@ WhatsApp__BusinessAccountId
 WhatsApp__AccessToken
 WhatsApp__VerifyToken
 WhatsApp__AppSecret
+Auth__BootstrapKey
 ```
+
+`Auth__BootstrapKey` se utiliza únicamente para crear el primer administrador desde la pantalla inicial de la aplicación. Después de crearlo, el endpoint de configuración queda deshabilitado por la existencia del administrador y la variable puede eliminarse de Render. Las sesiones duran 12 horas por defecto; puede cambiarse con `Auth__SessionHours`.
+
+Los PIN de cuatro dígitos se almacenan con PBKDF2-HMAC-SHA256, una sal aleatoria por usuario y 600.000 iteraciones. Nunca se guarda el PIN original. PostgreSQL conserva únicamente el hash SHA-256 de cada token de sesión. Bloquear, deshabilitar o cambiar el PIN de un usuario revoca sus sesiones. El endpoint de acceso limita los intentos para reducir ataques por fuerza bruta.
 
 La URL pública proporcionada se descompuso en `Host`, `Port=5432`, `Name=bd_kameron_sushi` y `SslMode=Require`. Npgsql arma internamente la conexión; la contraseña no aparece en la URL versionada.
 
@@ -157,6 +163,11 @@ Al iniciar, el backend registra y aplica sus migraciones pendientes en la tabla 
 | `POST` | `/api/kitchen/print-jobs/claim` | Reserva atómicamente la siguiente comanda pendiente para un equipo. |
 | `POST` | `/api/kitchen/print-jobs/{claimToken}/complete` | Confirma que la comanda reservada fue enviada a la impresora. |
 | `POST` | `/api/kitchen/print-jobs/{claimToken}/fail` | Libera la reserva y programa un reintento después de un fallo. |
+| `POST` | `/api/auth/login` | Inicia una sesión del personal. |
+| `GET` | `/api/auth/me` | Devuelve el usuario y los roles de la sesión. |
+| `POST` | `/api/auth/logout` | Revoca la sesión actual. |
+| `POST` | `/api/auth/bootstrap` | Crea el primer administrador usando `Auth__BootstrapKey`; solo funciona una vez. |
+| `GET/POST/PUT` | `/api/admin/users` | Administra usuarios, roles, estado y cambio de contraseña. |
 | `GET/POST/PUT` | `/api/admin/categories` | Lista, crea y edita categorías, estado y orden de exhibición. |
 | `GET/POST/PUT` | `/api/admin/products` | Lista, crea y edita productos, precios, disponibilidad, orden y configuración. |
 | `GET/POST/PUT` | `/api/admin/wrappers` | Administra envolturas. |
@@ -175,9 +186,7 @@ Al iniciar, el backend registra y aplica sus migraciones pendientes en la tabla 
 
 El cliente puede enviar los métodos `efectivo`, `tarjeta` o `edenred`. El backend valida productos, variantes, pagos y canjes contra PostgreSQL y nunca acepta el precio ni el coste en puntos enviados por la caja. Al confirmar un pedido con canjes, bloquea la cuenta de fidelización dentro de la transacción, vuelve a validar el saldo, descuenta los puntos, registra el movimiento y reduce el stock de canje. Los ejemplos completos están en `src/KameronSushi.Api/KameronSushi.Api.http`.
 
-La creación de un pedido local exige un turno abierto y guarda su identificador en `pedidos.id_turno`. Las migraciones automáticas también incorporan el orden del catálogo, la configuración administrativa de promociones y el objetivo de tiempo de cocina. Mientras no exista autenticación de operadores, la apertura usa el usuario técnico `Caja local`; cuando se implemente el acceso de cajeros debe reemplazarse por el usuario autenticado.
-
-Las rutas de administración todavía no tienen autenticación. Antes de usarlas fuera de una red controlada debe agregarse el inicio de sesión y la autorización del rol administrador.
+La creación de un pedido local exige un turno abierto y guarda su identificador en `pedidos.id_turno`. La apertura y el cierre guardan el usuario autenticado. Administración requiere `administrador`; caja requiere `caja` o `administrador`; cocina requiere `cocina` o `administrador`. El webhook de Meta y `/health` permanecen públicos por diseño.
 
 La migración `007_kitchen_print_queue` agrega el estado de impresión a `pedidos`. Un trigger en PostgreSQL encola todos los pedidos nuevos que entren en estado `confirmado` o `en_preparacion`, sin depender de que provengan de caja, WhatsApp o delivery. La reserva usa bloqueo `FOR UPDATE SKIP LOCKED`, un token único y un arrendamiento temporal para que varios computadores de cocina no impriman simultáneamente la misma comanda. En la aplicación de escritorio se activa desde **Administración > Impresora > Imprimir comandas de cocina automáticamente**.
 

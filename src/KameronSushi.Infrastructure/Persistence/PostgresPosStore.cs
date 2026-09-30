@@ -720,7 +720,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         return await reader.ReadAsync(cancellationToken) ? ReadShift(reader) : null;
     }
 
-    public async Task<CashShift> OpenShiftAsync(decimal openingAmount, CancellationToken cancellationToken)
+    public async Task<CashShift> OpenShiftAsync(decimal openingAmount, long userId, CancellationToken cancellationToken)
     {
         if (openingAmount < 0) throw new ArgumentException("El monto inicial no puede ser negativo.");
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
@@ -733,35 +733,23 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             return existing;
         }
 
-        long userId;
-        await using (var userCommand = connection.CreateCommand())
-        {
-            userCommand.Transaction = transaction;
-            userCommand.CommandText = """
-                INSERT INTO usuarios (nombre, email, password_hash, estado)
-                VALUES ('Caja local', 'caja.local@kameronsushi.internal', 'AUTENTICACION_PENDIENTE', 'activo')
-                ON CONFLICT ((lower(email))) DO UPDATE
-                    SET estado = 'activo', actualizado_en = NOW()
-                RETURNING id_usuario;
-                """;
-            userId = Convert.ToInt64(await userCommand.ExecuteScalarAsync(cancellationToken));
-        }
-
         CashShift shift;
         await using (var shiftCommand = connection.CreateCommand())
         {
             shiftCommand.Transaction = transaction;
             shiftCommand.CommandText = """
                 INSERT INTO turnos (id_usuario_apertura, estado, monto_inicial)
-                VALUES (@user_id, 'abierto', @opening_amount)
-                RETURNING id_turno, estado, abierto_en, cerrado_en, id_usuario_apertura, monto_inicial;
+                SELECT @user_id, 'abierto', @opening_amount
+                 WHERE EXISTS(SELECT 1 FROM usuarios WHERE id_usuario=@user_id AND estado='activo')
+                RETURNING id_turno, estado, abierto_en, cerrado_en, id_usuario_apertura, monto_inicial,
+                          (SELECT nombre FROM usuarios WHERE id_usuario=@user_id);
                 """;
             shiftCommand.Parameters.AddWithValue("user_id", userId);
             shiftCommand.Parameters.AddWithValue("opening_amount", openingAmount);
             await using var reader = await shiftCommand.ExecuteReaderAsync(cancellationToken);
-            await reader.ReadAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken)) throw new ArgumentException("El usuario de caja no está activo.");
             shift = new CashShift(reader.GetInt64(0), reader.GetString(1),
-                reader.GetFieldValue<DateTimeOffset>(2), null, reader.GetInt64(4), "Caja local", reader.GetDecimal(5));
+                reader.GetFieldValue<DateTimeOffset>(2), null, reader.GetInt64(4), reader.GetString(6), reader.GetDecimal(5));
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -801,7 +789,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
     }
 
     public async Task<CashShiftReport?> CloseShiftAsync(
-        long shiftId, CloseCashShift request, CancellationToken cancellationToken)
+        long shiftId, CloseCashShift request, long userId, CancellationToken cancellationToken)
     {
         if (request.CountedCash < 0) throw new ArgumentException("El efectivo contado no puede ser negativo.");
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
@@ -822,7 +810,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             command.CommandText = """
                 UPDATE turnos
                    SET estado = 'cerrado', cerrado_en = NOW(),
-                       id_usuario_cierre = id_usuario_apertura,
+                       id_usuario_cierre = @user_id,
                        efectivo_contado = @counted_cash,
                        efectivo_esperado = @expected_cash,
                        diferencia_efectivo = @difference,
@@ -832,6 +820,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                 RETURNING id_turno;
                 """;
             command.Parameters.AddWithValue("shift_id", shiftId);
+            command.Parameters.AddWithValue("user_id", userId);
             command.Parameters.AddWithValue("counted_cash", request.CountedCash);
             command.Parameters.AddWithValue("expected_cash", report.ExpectedCash);
             command.Parameters.AddWithValue("difference", difference);

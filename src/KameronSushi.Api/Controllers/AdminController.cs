@@ -1,10 +1,12 @@
 using KameronSushi.Application.Abstractions;
 using KameronSushi.Application.Admin;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 
 namespace KameronSushi.Api.Controllers;
 
 [ApiController]
+[Authorize(Roles = "administrador")]
 [Route("api/admin")]
 public sealed class AdminController(IAdminStore store) : ControllerBase
 {

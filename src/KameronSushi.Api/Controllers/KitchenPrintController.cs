@@ -1,10 +1,12 @@
 using KameronSushi.Application.Abstractions;
 using KameronSushi.Application.Pos;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 
 namespace KameronSushi.Api.Controllers;
 
 [ApiController]
+[Authorize(Roles = "administrador,cocina")]
 [Route("api/kitchen/print-jobs")]
 public sealed class KitchenPrintController(IPosStore store) : ControllerBase
 {

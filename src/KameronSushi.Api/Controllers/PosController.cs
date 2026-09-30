@@ -1,10 +1,13 @@
 using KameronSushi.Application.Abstractions;
 using KameronSushi.Application.Pos;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
+using System.Security.Claims;
 
 namespace KameronSushi.Api.Controllers;
 
 [ApiController]
+[Authorize(Roles = "administrador,caja")]
 [Route("api/pos")]
 public sealed class PosController(IPosStore store) : ControllerBase
 {
@@ -20,7 +23,7 @@ public sealed class PosController(IPosStore store) : ControllerBase
     {
         try
         {
-            return Ok(await store.OpenShiftAsync(request.OpeningAmount, cancellationToken));
+            return Ok(await store.OpenShiftAsync(request.OpeningAmount, GetUserId(), cancellationToken));
         }
         catch (ArgumentException exception)
         {
@@ -56,7 +59,7 @@ public sealed class PosController(IPosStore store) : ControllerBase
     {
         try
         {
-            var report = await store.CloseShiftAsync(shiftId, request, cancellationToken);
+            var report = await store.CloseShiftAsync(shiftId, request, GetUserId(), cancellationToken);
             return report is null ? NotFound() : Ok(report);
         }
         catch (ArgumentException exception)
@@ -68,7 +71,7 @@ public sealed class PosController(IPosStore store) : ControllerBase
     private static readonly HashSet<string> ValidStatuses =
     [
         "borrador", "pendiente_pago", "confirmado", "en_preparacion",
-        "listo", "en_reparto", "entregado", "cancelado"
+        "listo", "cancelado"
     ];
 
     [HttpGet("catalog")]
@@ -137,4 +140,6 @@ public sealed class PosController(IPosStore store) : ControllerBase
         statusCode: StatusCodes.Status400BadRequest,
         title: "Operación de caja inválida",
         detail: exception.Message);
+
+    private long GetUserId() => long.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 }
