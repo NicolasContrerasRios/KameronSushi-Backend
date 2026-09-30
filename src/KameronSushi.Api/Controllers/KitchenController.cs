@@ -19,19 +19,6 @@ public sealed class KitchenController(IPosStore store) : ControllerBase
     public async Task<ActionResult<IReadOnlyList<KitchenPerformanceSummary>>> GetPerformance(CancellationToken cancellationToken) =>
         Ok(await store.GetKitchenPerformanceAsync(cancellationToken));
 
-    [HttpPatch("{orderId:long}/preparing")]
-    public async Task<IActionResult> MarkPreparing(long orderId, CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await store.MarkOrderPreparingAsync(orderId, GetUserId(), cancellationToken) ? NoContent() : NotFound();
-        }
-        catch (InvalidOperationException exception)
-        {
-            return Conflict(new ProblemDetails { Title = "Transición no permitida", Detail = exception.Message });
-        }
-    }
-
     [HttpPatch("{orderId:long}/ready")]
     public async Task<IActionResult> MarkReady(long orderId, CancellationToken cancellationToken)
     {

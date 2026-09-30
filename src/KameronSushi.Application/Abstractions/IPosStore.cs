@@ -13,7 +13,6 @@ public interface IPosStore
     Task<bool> CancelOrderAsync(long orderId, string reason, long userId, CancellationToken cancellationToken);
     Task<IReadOnlyList<KitchenOrderSummary>> GetKitchenOrdersAsync(CancellationToken cancellationToken);
     Task<IReadOnlyList<KitchenPerformanceSummary>> GetKitchenPerformanceAsync(CancellationToken cancellationToken);
-    Task<bool> MarkOrderPreparingAsync(long orderId, long userId, CancellationToken cancellationToken);
     Task<bool> MarkOrderReadyAsync(long orderId, long userId, CancellationToken cancellationToken);
     Task<KitchenPrintJob?> ClaimKitchenPrintJobAsync(string workerId, CancellationToken cancellationToken);
     Task<bool> CompleteKitchenPrintJobAsync(Guid claimToken, string workerId, CancellationToken cancellationToken);

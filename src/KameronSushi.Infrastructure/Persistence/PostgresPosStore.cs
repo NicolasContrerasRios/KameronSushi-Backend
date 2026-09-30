@@ -270,7 +270,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             orderCommand.Transaction = transaction;
             orderCommand.CommandText = """
                 INSERT INTO pedidos (id_cliente, id_turno, estado, subtotal, descuento, tipo_entrega, canal_origen, costo_envio)
-                VALUES (@customer_id, @shift_id, 'confirmado', @subtotal, 0, 'retiro', 'local', 0)
+                VALUES (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, 'retiro', 'local', 0)
                 RETURNING id_pedido, creado_en;
                 """;
             orderCommand.Parameters.AddWithValue("subtotal", subtotal);
@@ -615,7 +615,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             SELECT p.id_pedido, p.estado, p.tipo_entrega, p.creado_en, d.cantidad, d.nombre_producto, d.observaciones
               FROM pedidos p
               JOIN detalle_pedidos d ON d.id_pedido = p.id_pedido
-             WHERE p.estado IN ('confirmado', 'en_preparacion')
+             WHERE p.estado = 'en_preparacion'
              ORDER BY p.creado_en, d.id_detalle;
             """);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -689,7 +689,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                   LEFT JOIN entregas_pedido e ON e.id_pedido = p.id_pedido
                  WHERE p.pendiente_impresion = TRUE
                    AND p.impreso_en IS NULL
-                   AND p.estado IN ('confirmado', 'en_preparacion')
+                   AND p.estado = 'en_preparacion'
                    AND p.impresion_reintentar_en <= NOW()
                    AND (p.impresion_tomada_en IS NULL OR p.impresion_tomada_en < NOW() - INTERVAL '2 minutes')
                  ORDER BY p.creado_en, p.id_pedido
@@ -937,9 +937,6 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         await transaction.CommitAsync(cancellationToken);
         return await GetShiftReportAsync(shiftId, cancellationToken);
     }
-
-    public Task<bool> MarkOrderPreparingAsync(long orderId, long userId, CancellationToken cancellationToken) =>
-        ChangeOrderStateAsync(orderId, "confirmado", "en_preparacion", userId, "cocina", cancellationToken);
 
     public Task<bool> MarkOrderReadyAsync(long orderId, long userId, CancellationToken cancellationToken) =>
         ChangeOrderStateAsync(orderId, "en_preparacion", "listo", userId, "cocina", cancellationToken);

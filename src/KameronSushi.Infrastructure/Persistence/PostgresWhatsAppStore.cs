@@ -368,7 +368,7 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         const string updateSql = """
             UPDATE pedidos
-            SET estado = 'confirmado'
+            SET estado = 'en_preparacion'
             WHERE id_pedido = (
                 SELECT id_pedido FROM pedidos
                 WHERE id_conversacion_whatsapp = @conversation_id AND estado = 'borrador'
