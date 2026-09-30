@@ -94,7 +94,7 @@ public sealed class PosController(IPosStore store) : ControllerBase
     {
         try
         {
-            var created = await store.CreateLocalOrderAsync(command, cancellationToken);
+            var created = await store.CreateLocalOrderAsync(command, GetUserId(), cancellationToken);
             return CreatedAtAction(nameof(GetOrder), new { orderId = created.OrderId }, created);
         }
         catch (ArgumentException exception)
@@ -134,6 +134,32 @@ public sealed class PosController(IPosStore store) : ControllerBase
     {
         var order = await store.GetOrderAsync(orderId, cancellationToken);
         return order is null ? NotFound() : Ok(order);
+    }
+
+    [HttpGet("orders/{orderId:long}/history")]
+    public async Task<ActionResult<IReadOnlyList<OrderStateChange>>> GetOrderHistory(
+        long orderId, CancellationToken cancellationToken)
+    {
+        if (await store.GetOrderAsync(orderId, cancellationToken) is null) return NotFound();
+        return Ok(await store.GetOrderHistoryAsync(orderId, cancellationToken));
+    }
+
+    [HttpPost("orders/{orderId:long}/cancel")]
+    public async Task<IActionResult> CancelOrder(long orderId, CancelOrder request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await store.CancelOrderAsync(orderId, request.Reason, GetUserId(), cancellationToken)
+                ? NoContent() : NotFound();
+        }
+        catch (ArgumentException exception)
+        {
+            return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Cancelación inválida", detail: exception.Message);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Problem(statusCode: StatusCodes.Status409Conflict, title: "Transición no permitida", detail: exception.Message);
+        }
     }
 
     private ObjectResult CashOperationProblem(ArgumentException exception) => Problem(

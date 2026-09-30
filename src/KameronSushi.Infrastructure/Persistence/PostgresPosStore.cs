@@ -204,7 +204,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         return new CustomerLoyalty(customerId, name, storedPhone, points, rewards);
     }
 
-    public async Task<CreatedOrder> CreateLocalOrderAsync(CreateLocalOrder command, CancellationToken cancellationToken)
+    public async Task<CreatedOrder> CreateLocalOrderAsync(CreateLocalOrder command, long userId, CancellationToken cancellationToken)
     {
         var purchaseItems = command.Items ?? [];
         var rewardItems = (command.Rewards ?? [])
@@ -224,6 +224,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        await SetAuditContextAsync(connection, transaction, userId, "caja", null, cancellationToken);
 
         var shiftId = await GetOpenShiftIdAsync(connection, transaction, cancellationToken)
             ?? throw new ArgumentException("No hay un turno de caja abierto. Inicia el turno antes de crear pedidos.");
@@ -269,7 +270,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             orderCommand.Transaction = transaction;
             orderCommand.CommandText = """
                 INSERT INTO pedidos (id_cliente, id_turno, estado, subtotal, descuento, tipo_entrega, canal_origen, costo_envio)
-                VALUES (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, 'retiro', 'local', 0)
+                VALUES (@customer_id, @shift_id, 'confirmado', @subtotal, 0, 'retiro', 'local', 0)
                 RETURNING id_pedido, creado_en;
                 """;
             orderCommand.Parameters.AddWithValue("subtotal", subtotal);
@@ -503,10 +504,115 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             items, payments);
     }
 
+    public async Task<IReadOnlyList<OrderStateChange>> GetOrderHistoryAsync(long orderId, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand("""
+            SELECT h.id_cambio,h.estado_anterior,h.estado_nuevo,h.motivo,h.origen,
+                   h.id_usuario,u.nombre,h.cambiado_en
+              FROM historial_estados_pedido h
+              LEFT JOIN usuarios u ON u.id_usuario=h.id_usuario
+             WHERE h.id_pedido=@order_id
+             ORDER BY h.cambiado_en,h.id_cambio;
+            """);
+        command.Parameters.AddWithValue("order_id", orderId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var history = new List<OrderStateChange>();
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            history.Add(new OrderStateChange(
+                reader.GetInt64(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetInt64(5), reader.IsDBNull(6) ? null : reader.GetString(6),
+                reader.GetFieldValue<DateTimeOffset>(7)));
+        }
+        return history;
+    }
+
+    public async Task<bool> CancelOrderAsync(long orderId, string reason, long userId, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(reason)) throw new ArgumentException("El motivo de cancelación es obligatorio.");
+        var normalizedReason = reason.Trim();
+        if (normalizedReason.Length > 500) throw new ArgumentException("El motivo no puede superar 500 caracteres.");
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        string? status;
+        long? customerId;
+        await using (var lockCommand = connection.CreateCommand())
+        {
+            lockCommand.Transaction = transaction;
+            lockCommand.CommandText = "SELECT estado,id_cliente FROM pedidos WHERE id_pedido=@id FOR UPDATE;";
+            lockCommand.Parameters.AddWithValue("id", orderId);
+            await using var reader = await lockCommand.ExecuteReaderAsync(cancellationToken);
+            if (!await reader.ReadAsync(cancellationToken)) return false;
+            status = reader.GetString(0);
+            customerId = reader.IsDBNull(1) ? null : reader.GetInt64(1);
+        }
+        if (status is "listo" or "cancelado")
+            throw new InvalidOperationException($"Un pedido en estado '{status}' no se puede cancelar.");
+
+        await SetAuditContextAsync(connection, transaction, userId, "caja", normalizedReason, cancellationToken);
+        await using (var update = connection.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = """
+                UPDATE pedidos SET estado='cancelado' WHERE id_pedido=@id;
+                UPDATE pagos SET estado='cancelado',detalle_estado=@reason,actualizado_en=NOW()
+                 WHERE id_pedido=@id AND estado IN ('pendiente','aprobado');
+                """;
+            update.Parameters.AddWithValue("id", orderId);
+            update.Parameters.AddWithValue("reason", normalizedReason);
+            await update.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var redeemedPoints = 0;
+        await using (var points = connection.CreateCommand())
+        {
+            points.Transaction = transaction;
+            points.CommandText = "SELECT COALESCE(SUM(cantidad*puntos_unitarios),0)::int FROM detalle_pedidos WHERE id_pedido=@id AND tipo_item='canje';";
+            points.Parameters.AddWithValue("id", orderId);
+            redeemedPoints = Convert.ToInt32(await points.ExecuteScalarAsync(cancellationToken));
+        }
+        if (redeemedPoints > 0 && customerId is not null)
+        {
+            await using var reversal = connection.CreateCommand();
+            reversal.Transaction = transaction;
+            reversal.CommandText = """
+                WITH cuenta AS (
+                    SELECT id_cuenta,saldo_puntos FROM cuentas_fidelizacion
+                     WHERE id_cliente=@customer_id FOR UPDATE
+                ), actualizada AS (
+                    UPDATE cuentas_fidelizacion cf
+                       SET saldo_puntos=cf.saldo_puntos+@points,
+                           puntos_canjeados=GREATEST(cf.puntos_canjeados-@points,0),actualizado_en=NOW()
+                      FROM cuenta c WHERE cf.id_cuenta=c.id_cuenta
+                    RETURNING cf.id_cuenta,c.saldo_puntos AS anterior,cf.saldo_puntos AS resultante
+                )
+                INSERT INTO movimiento_puntos(id_cuenta,id_pedido,tipo,puntos,saldo_anterior,saldo_resultante,descripcion)
+                SELECT id_cuenta,@order_id,'reversion',@points,anterior,resultante,@description FROM actualizada;
+
+                UPDATE productos_canje pc
+                   SET stock_disponible=CASE WHEN pc.stock_disponible IS NULL THEN NULL ELSE pc.stock_disponible+x.cantidad END,
+                       actualizado_en=NOW()
+                  FROM (SELECT id_producto,SUM(cantidad)::int cantidad FROM detalle_pedidos
+                         WHERE id_pedido=@order_id AND tipo_item='canje' GROUP BY id_producto) x
+                 WHERE pc.id_producto=x.id_producto;
+                """;
+            reversal.Parameters.AddWithValue("customer_id", customerId.Value);
+            reversal.Parameters.AddWithValue("points", redeemedPoints);
+            reversal.Parameters.AddWithValue("order_id", orderId);
+            reversal.Parameters.AddWithValue("description", $"Reversión por cancelación: {normalizedReason}");
+            await reversal.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
     public async Task<IReadOnlyList<KitchenOrderSummary>> GetKitchenOrdersAsync(CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand("""
-            SELECT p.id_pedido, p.tipo_entrega, p.creado_en, d.cantidad, d.nombre_producto, d.observaciones
+            SELECT p.id_pedido, p.estado, p.tipo_entrega, p.creado_en, d.cantidad, d.nombre_producto, d.observaciones
               FROM pedidos p
               JOIN detalle_pedidos d ON d.id_pedido = p.id_pedido
              WHERE p.estado IN ('confirmado', 'en_preparacion')
@@ -519,18 +625,18 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             var orderId = reader.GetInt64(0);
             if (!orders.TryGetValue(orderId, out var order))
             {
-                order = new KitchenBuilder(orderId, reader.GetString(1), reader.GetFieldValue<DateTimeOffset>(2));
+                order = new KitchenBuilder(orderId, reader.GetString(1), reader.GetString(2), reader.GetFieldValue<DateTimeOffset>(3));
                 orders.Add(orderId, order);
             }
 
-            var quantity = reader.GetInt32(3);
-            var name = reader.GetString(4);
-            var details = reader.IsDBNull(5) ? null : reader.GetString(5);
+            var quantity = reader.GetInt32(4);
+            var name = reader.GetString(5);
+            var details = reader.IsDBNull(6) ? null : reader.GetString(6);
             var text = string.IsNullOrWhiteSpace(details) ? name : $"{name} — {details}";
             order.Products.Add(quantity == 1 ? text : $"{quantity} × {text}");
         }
 
-        return orders.Values.Select(order => new KitchenOrderSummary(order.Id, order.DeliveryType, order.CreatedAt, order.Products)).ToList();
+        return orders.Values.Select(order => new KitchenOrderSummary(order.Id, order.Status, order.DeliveryType, order.CreatedAt, order.Products)).ToList();
     }
 
     public async Task<IReadOnlyList<KitchenPerformanceSummary>> GetKitchenPerformanceAsync(CancellationToken cancellationToken)
@@ -832,16 +938,56 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         return await GetShiftReportAsync(shiftId, cancellationToken);
     }
 
-    public async Task<bool> MarkOrderReadyAsync(long orderId, CancellationToken cancellationToken)
+    public Task<bool> MarkOrderPreparingAsync(long orderId, long userId, CancellationToken cancellationToken) =>
+        ChangeOrderStateAsync(orderId, "confirmado", "en_preparacion", userId, "cocina", cancellationToken);
+
+    public Task<bool> MarkOrderReadyAsync(long orderId, long userId, CancellationToken cancellationToken) =>
+        ChangeOrderStateAsync(orderId, "en_preparacion", "listo", userId, "cocina", cancellationToken);
+
+    private async Task<bool> ChangeOrderStateAsync(
+        long orderId, string expectedStatus, string newStatus, long userId, string source, CancellationToken cancellationToken)
     {
-        await using var command = dataSource.CreateCommand("""
-            UPDATE pedidos
-               SET estado = 'listo', listo_en = NOW()
-             WHERE id_pedido = @order_id
-               AND estado IN ('confirmado', 'en_preparacion');
-            """);
-        command.Parameters.AddWithValue("order_id", orderId);
-        return await command.ExecuteNonQueryAsync(cancellationToken) == 1;
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        string? currentStatus;
+        await using (var current = connection.CreateCommand())
+        {
+            current.Transaction = transaction;
+            current.CommandText = "SELECT estado FROM pedidos WHERE id_pedido=@id FOR UPDATE;";
+            current.Parameters.AddWithValue("id", orderId);
+            currentStatus = await current.ExecuteScalarAsync(cancellationToken) as string;
+        }
+        if (currentStatus is null) return false;
+        if (currentStatus != expectedStatus)
+            throw new InvalidOperationException($"El pedido está en estado '{currentStatus}' y no puede pasar a '{newStatus}'.");
+        await SetAuditContextAsync(connection, transaction, userId, source, null, cancellationToken);
+        await using (var update = connection.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = "UPDATE pedidos SET estado=@status WHERE id_pedido=@id;";
+            update.Parameters.AddWithValue("status", newStatus);
+            update.Parameters.AddWithValue("id", orderId);
+            await update.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
+    private static async Task SetAuditContextAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, long userId,
+        string source, string? reason, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT set_config('kameron.usuario_id',@user_id,true),
+                   set_config('kameron.origen',@source,true),
+                   set_config('kameron.motivo',@reason,true);
+            """;
+        command.Parameters.AddWithValue("user_id", userId.ToString());
+        command.Parameters.AddWithValue("source", source);
+        command.Parameters.AddWithValue("reason", reason ?? string.Empty);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     private static async Task<long?> GetOpenShiftIdAsync(
@@ -1156,7 +1302,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         long ProductId, string Name, int Quantity, decimal UnitPrice, bool RequiresConfiguration,
         long? OptionId, long? ProductWrapperId, long? SauceId, short? OptionNumber,
         string? Ingredients, string? WrapperName, string? SauceName, string? Details = null);
-    private sealed record KitchenBuilder(long Id, string DeliveryType, DateTimeOffset CreatedAt)
+    private sealed record KitchenBuilder(long Id, string Status, string DeliveryType, DateTimeOffset CreatedAt)
     {
         public List<string> Products { get; } = [];
     }

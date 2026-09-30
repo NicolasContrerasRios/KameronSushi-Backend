@@ -42,6 +42,18 @@ public sealed record CreateLocalOrder(
     long? CustomerId = null,
     IReadOnlyList<CreateRewardItem>? Rewards = null);
 
+public sealed record CancelOrder(string Reason);
+
+public sealed record OrderStateChange(
+    long ChangeId,
+    string? PreviousStatus,
+    string Status,
+    string? Reason,
+    string Source,
+    long? ChangedByUserId,
+    string? ChangedByName,
+    DateTimeOffset ChangedAt);
+
 public sealed record CreateLocalOrderItem(
     long ProductId,
     long? OptionId,
@@ -110,6 +122,7 @@ public sealed record PosOrderPayment(
 
 public sealed record KitchenOrderSummary(
     long OrderId,
+    string Status,
     string DeliveryType,
     DateTimeOffset CreatedAt,
     IReadOnlyList<string> Products);

@@ -113,6 +113,8 @@ La integración saliente usa Graph API `v26.0`, configurable mediante `WhatsApp:
 - Comandos de recuperación: `menú`, `pedido` y `finalizar`.
 - API de caja para cargar el catálogo desde PostgreSQL y crear pedidos locales con sus detalles y pagos.
 - API de cocina para consultar pedidos activos y marcarlos como listos.
+- Ciclo de vida controlado `confirmado → en_preparacion → listo`, con `listo` como estado final.
+- Historial de estados con fecha, origen y usuario responsable; cancelación obligatoriamente motivada.
 - API administrativa para crear productos simples, cambiar sus datos y configurar productos canjeables.
 - Consulta de fidelización por teléfono y canje de puntos desde la caja.
 - Turnos reales de caja: apertura, consulta, reanudación y cierre; los pedidos locales quedan asociados al turno abierto.
@@ -157,9 +159,12 @@ Al iniciar, el backend registra y aplica sus migraciones pendientes en la tabla 
 | `POST` | `/api/pos/orders` | Crea un pedido local, recalcula sus precios en el servidor y registra sus pagos. |
 | `GET` | `/api/pos/orders?status=en_preparacion&limit=50` | Lista pedidos recientes para la caja; el estado es opcional. |
 | `GET` | `/api/pos/orders/{orderId}` | Devuelve el encabezado, los ítems y los pagos de un pedido. |
+| `GET` | `/api/pos/orders/{orderId}/history` | Devuelve el historial cronológico de estados y responsables. |
+| `POST` | `/api/pos/orders/{orderId}/cancel` | Cancela un pedido activo con motivo, revierte canjes y cancela sus pagos. |
 | `GET` | `/api/kitchen/orders` | Lista pedidos confirmados o en preparación para cocina. |
 | `GET` | `/api/kitchen/orders/performance` | Calcula por tipo de entrega el tiempo promedio hasta quedar listo dentro del turno abierto. |
-| `PATCH` | `/api/kitchen/orders/{orderId}/ready` | Marca un pedido activo como listo. |
+| `PATCH` | `/api/kitchen/orders/{orderId}/preparing` | Pasa un pedido confirmado a preparación. |
+| `PATCH` | `/api/kitchen/orders/{orderId}/ready` | Pasa un pedido en preparación a listo, su estado final. |
 | `POST` | `/api/kitchen/print-jobs/claim` | Reserva atómicamente la siguiente comanda pendiente para un equipo. |
 | `POST` | `/api/kitchen/print-jobs/{claimToken}/complete` | Confirma que la comanda reservada fue enviada a la impresora. |
 | `POST` | `/api/kitchen/print-jobs/{claimToken}/fail` | Libera la reserva y programa un reintento después de un fallo. |
@@ -189,6 +194,8 @@ El cliente puede enviar los métodos `efectivo`, `tarjeta` o `edenred`. El backe
 La creación de un pedido local exige un turno abierto y guarda su identificador en `pedidos.id_turno`. La apertura y el cierre guardan el usuario autenticado. Administración requiere `administrador`; caja requiere `caja` o `administrador`; cocina requiere `cocina` o `administrador`. El webhook de Meta y `/health` permanecen públicos por diseño.
 
 La migración `007_kitchen_print_queue` agrega el estado de impresión a `pedidos`. Un trigger en PostgreSQL encola todos los pedidos nuevos que entren en estado `confirmado` o `en_preparacion`, sin depender de que provengan de caja, WhatsApp o delivery. La reserva usa bloqueo `FOR UPDATE SKIP LOCKED`, un token único y un arrendamiento temporal para que varios computadores de cocina no impriman simultáneamente la misma comanda. En la aplicación de escritorio se activa desde **Administración > Impresora > Imprimir comandas de cocina automáticamente**.
+
+La migración `009_order_lifecycle` crea `historial_estados_pedido` y aplica las transiciones válidas también en PostgreSQL. Caja crea los pedidos como `confirmado`; Cocina debe iniciar su preparación antes de marcarlos `listo`. Los estados `listo` y `cancelado` son terminales. Al cancelar un pedido con canjes se restauran los puntos y el stock dentro de la misma transacción.
 
 Para desarrollo con HTTPS:
 

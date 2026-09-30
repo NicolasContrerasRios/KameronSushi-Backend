@@ -6,12 +6,15 @@ public interface IPosStore
 {
     Task<IReadOnlyList<CatalogProduct>> GetCatalogAsync(CancellationToken cancellationToken);
     Task<CustomerLoyalty?> GetCustomerLoyaltyByPhoneAsync(string phone, CancellationToken cancellationToken);
-    Task<CreatedOrder> CreateLocalOrderAsync(CreateLocalOrder command, CancellationToken cancellationToken);
+    Task<CreatedOrder> CreateLocalOrderAsync(CreateLocalOrder command, long userId, CancellationToken cancellationToken);
     Task<IReadOnlyList<PosOrderSummary>> GetOrdersAsync(string? status, int limit, CancellationToken cancellationToken);
     Task<PosOrderDetails?> GetOrderAsync(long orderId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<OrderStateChange>> GetOrderHistoryAsync(long orderId, CancellationToken cancellationToken);
+    Task<bool> CancelOrderAsync(long orderId, string reason, long userId, CancellationToken cancellationToken);
     Task<IReadOnlyList<KitchenOrderSummary>> GetKitchenOrdersAsync(CancellationToken cancellationToken);
     Task<IReadOnlyList<KitchenPerformanceSummary>> GetKitchenPerformanceAsync(CancellationToken cancellationToken);
-    Task<bool> MarkOrderReadyAsync(long orderId, CancellationToken cancellationToken);
+    Task<bool> MarkOrderPreparingAsync(long orderId, long userId, CancellationToken cancellationToken);
+    Task<bool> MarkOrderReadyAsync(long orderId, long userId, CancellationToken cancellationToken);
     Task<KitchenPrintJob?> ClaimKitchenPrintJobAsync(string workerId, CancellationToken cancellationToken);
     Task<bool> CompleteKitchenPrintJobAsync(Guid claimToken, string workerId, CancellationToken cancellationToken);
     Task<bool> FailKitchenPrintJobAsync(Guid claimToken, string workerId, string error, CancellationToken cancellationToken);
