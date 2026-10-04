@@ -46,6 +46,8 @@ public sealed class WhatsAppWebhookController(
             return Unauthorized();
         }
 
+        logger.LogInformation("Webhook válido de WhatsApp recibido ({PayloadLength} bytes)", payload.Length);
+
         using var document = JsonDocument.Parse(payload);
         foreach (var value in EnumerateValues(document.RootElement))
         {
@@ -76,6 +78,10 @@ public sealed class WhatsAppWebhookController(
 
             var (text, selectionId, selectionTitle) = ReadContent(message, type);
             var contactName = contactNames.GetValueOrDefault(from) ?? from;
+            logger.LogInformation(
+                "Procesando mensaje entrante de WhatsApp. Tipo: {MessageType}; remitente: {MaskedSender}",
+                type,
+                MaskWaId(from));
             await conversationService.ProcessAsync(new IncomingWhatsAppMessage(
                 providerId,
                 from,
@@ -85,6 +91,10 @@ public sealed class WhatsAppWebhookController(
                 text,
                 selectionId,
                 selectionTitle), cancellationToken);
+            logger.LogInformation(
+                "Mensaje entrante de WhatsApp procesado. Tipo: {MessageType}; remitente: {MaskedSender}",
+                type,
+                MaskWaId(from));
         }
     }
 
@@ -198,4 +208,7 @@ public sealed class WhatsAppWebhookController(
         return suppliedBytes.Length == expectedBytes.Length &&
                System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(suppliedBytes, expectedBytes);
     }
+
+    private static string MaskWaId(string waId) =>
+        waId.Length <= 4 ? "****" : $"***{waId[^4..]}";
 }

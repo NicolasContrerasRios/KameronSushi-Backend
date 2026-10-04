@@ -40,10 +40,17 @@ public sealed class MetaWhatsAppMessageSender(
         }
 
         using var document = JsonDocument.Parse(responseBody);
-        return document.RootElement.TryGetProperty("messages", out var messages) && messages.GetArrayLength() > 0 &&
-               messages[0].TryGetProperty("id", out var id)
+        var providerMessageId = document.RootElement.TryGetProperty("messages", out var messages) && messages.GetArrayLength() > 0 &&
+                                messages[0].TryGetProperty("id", out var id)
             ? id.GetString()
             : null;
+
+        logger.LogInformation(
+            "Mensaje de WhatsApp enviado correctamente. Tipo: {MessageType}; destinatario: {MaskedRecipient}",
+            message.GetType().Name,
+            MaskWaId(recipientWaId));
+
+        return providerMessageId;
     }
 
     private static object BuildPayload(string recipient, OutgoingWhatsAppMessage message) => message switch
@@ -107,4 +114,7 @@ public sealed class MetaWhatsAppMessageSender(
         },
         _ => throw new ArgumentOutOfRangeException(nameof(message))
     };
+
+    private static string MaskWaId(string waId) =>
+        waId.Length <= 4 ? "****" : $"***{waId[^4..]}";
 }
