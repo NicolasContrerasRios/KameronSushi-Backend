@@ -43,6 +43,7 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddSingleton<IWebhookSignatureValidator, MetaWebhookSignatureValidator>();
         services.AddSingleton<TwilioWebhookSignatureValidator>();
+        services.AddScoped<TwilioTwiMlMessageSender>();
         services.AddHttpClient<MetaWhatsAppMessageSender>();
         services.AddHttpClient<TwilioWhatsAppMessageSender>();
         services.AddScoped<IWhatsAppMessageSender>(provider =>

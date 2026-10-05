@@ -12,6 +12,7 @@ namespace KameronSushi.Api.Controllers;
 public sealed class TwilioWhatsAppWebhookController(
     WhatsAppConversationService conversationService,
     TwilioWebhookSignatureValidator signatureValidator,
+    TwilioTwiMlMessageSender twiMlMessageSender,
     IOptions<WhatsAppOptions> whatsAppOptions,
     ILogger<TwilioWhatsAppWebhookController> logger) : ControllerBase
 {
@@ -58,13 +59,13 @@ public sealed class TwilioWhatsAppWebhookController(
             "text",
             body,
             null,
-            null), cancellationToken);
+            null), twiMlMessageSender, cancellationToken);
 
         logger.LogInformation(
             "Mensaje entrante de Twilio procesado. Remitente: {MaskedSender}",
             MaskWaId(waId));
 
-        return Ok();
+        return Content(twiMlMessageSender.BuildResponse(), "application/xml");
     }
 
     [HttpPost("status")]

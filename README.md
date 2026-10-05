@@ -127,7 +127,7 @@ Opcionalmente, configura los estados de entrega en:
 POST https://kameronsushi-backend.onrender.com/webhooks/twilio/whatsapp/status
 ```
 
-El backend valida `X-Twilio-Signature` con `Twilio__AuthToken`; no admite webhooks sin firma válida. Los botones y listas se convierten en opciones numeradas para que el Sandbox pueda ejecutar el flujo completo mediante mensajes de texto. Meta continúa disponible usando `WhatsApp__Provider=Meta`.
+El backend valida `X-Twilio-Signature` con `Twilio__AuthToken`; no admite webhooks sin firma válida. Los botones y listas se convierten en opciones numeradas para que el Sandbox pueda ejecutar el flujo completo mediante mensajes de texto. Las respuestas a mensajes entrantes se devuelven como TwiML en la misma solicitud, evitando la exigencia de `ContentSid` de las cuentas de prueba nuevas. La API REST de Twilio queda disponible para avisos iniciados por el sistema cuando la cuenta permita texto libre. Meta continúa disponible usando `WhatsApp__Provider=Meta`.
 
 ## Flujo disponible
 

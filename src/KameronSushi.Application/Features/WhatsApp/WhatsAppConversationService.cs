@@ -10,11 +10,19 @@ public sealed class WhatsAppConversationService(
     IWhatsAppMessageSender sender)
 {
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> ConversationLocks = new();
+    private IWhatsAppMessageSender? responseSender;
 
-    public async Task ProcessAsync(IncomingWhatsAppMessage incoming, CancellationToken cancellationToken)
+    public Task ProcessAsync(IncomingWhatsAppMessage incoming, CancellationToken cancellationToken) =>
+        ProcessAsync(incoming, null, cancellationToken);
+
+    public async Task ProcessAsync(
+        IncomingWhatsAppMessage incoming,
+        IWhatsAppMessageSender? responseSenderOverride,
+        CancellationToken cancellationToken)
     {
         var conversationLock = ConversationLocks.GetOrAdd(incoming.WaId, _ => new SemaphoreSlim(1, 1));
         await conversationLock.WaitAsync(cancellationToken);
+        responseSender = responseSenderOverride;
         try
         {
             await ProcessCoreAsync(incoming, cancellationToken);
@@ -22,6 +30,7 @@ public sealed class WhatsAppConversationService(
         }
         finally
         {
+            responseSender = null;
             conversationLock.Release();
         }
     }
@@ -505,7 +514,7 @@ public sealed class WhatsAppConversationService(
         try
         {
             await StoreTextMenuOptionsAsync(conversationId, message, cancellationToken);
-            var providerId = await sender.SendAsync(waId, message, cancellationToken);
+            var providerId = await (responseSender ?? sender).SendAsync(waId, message, cancellationToken);
             await store.RecordOutgoingAsync(conversationId, providerId, type, content, true, null, cancellationToken);
         }
         catch (Exception exception)

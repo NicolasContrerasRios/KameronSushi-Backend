@@ -37,7 +37,7 @@ public sealed class TwilioWhatsAppMessageSender(
         {
             ["From"] = NormalizeWhatsAppAddress(settings.WhatsAppNumber),
             ["To"] = NormalizeWhatsAppAddress(recipientWaId),
-            ["Body"] = RenderAsText(message)
+            ["Body"] = TwilioMessageTextRenderer.Render(message)
         });
 
         using var response = await httpClient.SendAsync(request, cancellationToken);
@@ -62,29 +62,6 @@ public sealed class TwilioWhatsAppMessageSender(
             MaskWaId(recipientWaId));
 
         return providerMessageId;
-    }
-
-    private static string RenderAsText(OutgoingWhatsAppMessage message) => message switch
-    {
-        TextWhatsAppMessage text => text.Body,
-        ButtonsWhatsAppMessage buttons => RenderOptions(
-            buttons.Body,
-            buttons.Buttons.Select(button => (button.Title, (string?)null))),
-        ListWhatsAppMessage list => RenderOptions(
-            list.Body,
-            list.Rows.Select(row => (row.Title, row.Description))),
-        _ => throw new ArgumentOutOfRangeException(nameof(message))
-    };
-
-    private static string RenderOptions(
-        string body,
-        IEnumerable<(string Title, string? Description)> options)
-    {
-        var lines = options.Select((option, index) =>
-            option.Description is null
-                ? $"{index + 1}. {option.Title}"
-                : $"{index + 1}. {option.Title} — {option.Description}");
-        return $"{body}\n\n{string.Join("\n", lines)}\n\nResponde con el número de una opción.";
     }
 
     private static string NormalizeWhatsAppAddress(string value)
