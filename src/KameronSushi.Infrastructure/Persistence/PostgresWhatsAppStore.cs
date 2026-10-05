@@ -116,6 +116,18 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
         return DeserializeContext(json ?? "{}");
     }
 
+    public async Task<bool> IsStoreOpenAsync(CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM turnos
+                WHERE estado = 'abierto' AND cerrado_en IS NULL
+            );
+            """);
+        return (bool)(await command.ExecuteScalarAsync(cancellationToken) ?? false);
+    }
+
     public async Task<IReadOnlyList<MenuCategory>> GetCategoriesAsync(CancellationToken cancellationToken)
     {
         const string sql = """
@@ -383,15 +395,27 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         const string updateSql = """
-            UPDATE pedidos
-            SET estado = 'en_preparacion'
-            WHERE id_pedido = (
-                SELECT id_pedido FROM pedidos
+            WITH turno_abierto AS MATERIALIZED (
+                SELECT id_turno
+                FROM turnos
+                WHERE estado = 'abierto' AND cerrado_en IS NULL
+                ORDER BY abierto_en DESC
+                LIMIT 1
+                FOR SHARE
+            ), pedido_borrador AS MATERIALIZED (
+                SELECT id_pedido
+                FROM pedidos
                 WHERE id_conversacion_whatsapp = @conversation_id AND estado = 'borrador'
-                ORDER BY creado_en DESC LIMIT 1
+                ORDER BY creado_en DESC
+                LIMIT 1
                 FOR UPDATE
             )
-            RETURNING id_pedido, total;
+            UPDATE pedidos AS p
+            SET estado = 'en_preparacion',
+                id_turno = t.id_turno
+            FROM turno_abierto AS t
+            WHERE p.id_pedido = (SELECT id_pedido FROM pedido_borrador)
+            RETURNING p.id_pedido, p.total;
             """;
         await using var updateCommand = new NpgsqlCommand(updateSql, connection, transaction);
         updateCommand.Parameters.AddWithValue("conversation_id", conversationId);

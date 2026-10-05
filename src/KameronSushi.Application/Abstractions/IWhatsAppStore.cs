@@ -9,6 +9,7 @@ public interface IWhatsAppStore
     Task UpdateConversationAsync(long conversationId, string step, IReadOnlyDictionary<string, string?> contextChanges, CancellationToken cancellationToken);
     Task UpdateConversationContextAsync(long conversationId, IReadOnlyDictionary<string, string?> contextChanges, CancellationToken cancellationToken);
     Task<IReadOnlyDictionary<string, string>> GetConversationContextAsync(long conversationId, CancellationToken cancellationToken);
+    Task<bool> IsStoreOpenAsync(CancellationToken cancellationToken);
     Task<IReadOnlyList<MenuCategory>> GetCategoriesAsync(CancellationToken cancellationToken);
     Task<IReadOnlyList<MenuProduct>> GetProductsAsync(long categoryId, CancellationToken cancellationToken);
     Task<MenuProduct?> GetProductAsync(long productId, CancellationToken cancellationToken);

@@ -138,6 +138,7 @@ El backend valida `X-Twilio-Signature` con `Twilio__AuthToken`; no admite webhoo
 - Categorías y productos desde PostgreSQL, con paginación por los límites de las listas de WhatsApp.
 - Opciones, envolturas, recargos, salsa y cantidad para rolls configurables.
 - Carrito persistido como pedido borrador y confirmación de pago en efectivo.
+- El bot solo inicia o continúa ventas mientras existe un turno de caja abierto; cuando el local está cerrado informa al cliente antes de mostrar el catálogo. Al confirmar, el pedido queda asociado al turno abierto dentro de la misma transacción.
 - Comandos de recuperación: `menú`, `pedido` y `finalizar`.
 - API de caja para cargar el catálogo desde PostgreSQL y crear pedidos locales con sus detalles y pagos.
 - API de cocina para consultar pedidos activos y marcarlos como listos.

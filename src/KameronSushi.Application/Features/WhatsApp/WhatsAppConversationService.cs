@@ -43,6 +43,17 @@ public sealed class WhatsAppConversationService(
             return;
         }
 
+        if (!await store.IsStoreOpenAsync(cancellationToken))
+        {
+            await SendAsync(
+                registration.ConversationId,
+                incoming.WaId,
+                new TextWhatsAppMessage(
+                    "En este momento el local está cerrado y no estamos recibiendo pedidos. Cuando abramos caja, escribe *inicio* para comenzar."),
+                cancellationToken);
+            return;
+        }
+
         var input = (incoming.SelectionId ?? incoming.Text ?? string.Empty).Trim();
         input = ResolveTextMenuSelection(registration.Context, input);
         var normalized = input.ToLowerInvariant();
