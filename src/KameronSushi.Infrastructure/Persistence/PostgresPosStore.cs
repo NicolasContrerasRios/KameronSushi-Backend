@@ -612,11 +612,19 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
     public async Task<IReadOnlyList<KitchenOrderSummary>> GetKitchenOrdersAsync(CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand("""
-            SELECT p.id_pedido, p.estado, p.tipo_entrega, p.creado_en, d.cantidad, d.nombre_producto, d.observaciones
+            SELECT p.id_pedido, p.estado, p.tipo_entrega,
+                   COALESCE(cocina.iniciado_en, p.creado_en) AS iniciado_en,
+                   d.cantidad, d.nombre_producto, d.observaciones
               FROM pedidos p
               JOIN detalle_pedidos d ON d.id_pedido = p.id_pedido
+              LEFT JOIN LATERAL (
+                  SELECT MIN(h.cambiado_en) AS iniciado_en
+                    FROM historial_estados_pedido h
+                   WHERE h.id_pedido = p.id_pedido
+                     AND h.estado_nuevo = 'en_preparacion'
+              ) cocina ON TRUE
              WHERE p.estado = 'en_preparacion'
-             ORDER BY p.creado_en, d.id_detalle;
+             ORDER BY iniciado_en, d.id_detalle;
             """);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var orders = new Dictionary<long, KitchenBuilder>();
@@ -642,14 +650,20 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
     public async Task<IReadOnlyList<KitchenPerformanceSummary>> GetKitchenPerformanceAsync(CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand("""
-            SELECT tipo_entrega,
+            SELECT p.tipo_entrega,
                    COUNT(*)::int,
-                   AVG(EXTRACT(EPOCH FROM (listo_en - creado_en)) / 60.0)::double precision
-              FROM pedidos
-             WHERE listo_en IS NOT NULL
-               AND id_turno = (SELECT id_turno FROM turnos WHERE estado = 'abierto' LIMIT 1)
-               AND tipo_entrega IN ('delivery', 'retiro')
-             GROUP BY tipo_entrega;
+                   AVG(EXTRACT(EPOCH FROM (p.listo_en - COALESCE(cocina.iniciado_en, p.creado_en))) / 60.0)::double precision
+              FROM pedidos p
+              LEFT JOIN LATERAL (
+                  SELECT MIN(h.cambiado_en) AS iniciado_en
+                    FROM historial_estados_pedido h
+                   WHERE h.id_pedido = p.id_pedido
+                     AND h.estado_nuevo = 'en_preparacion'
+              ) cocina ON TRUE
+             WHERE p.listo_en IS NOT NULL
+               AND p.id_turno = (SELECT id_turno FROM turnos WHERE estado = 'abierto' LIMIT 1)
+               AND p.tipo_entrega IN ('delivery', 'retiro')
+             GROUP BY p.tipo_entrega;
             """);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var performance = new List<KitchenPerformanceSummary>();
@@ -677,7 +691,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         {
             command.Transaction = transaction;
             command.CommandText = """
-                SELECT p.id_pedido, p.tipo_entrega, p.canal_origen, p.creado_en,
+                SELECT p.id_pedido, p.tipo_entrega, p.canal_origen,
+                       COALESCE(cocina.iniciado_en, p.creado_en) AS iniciado_en,
                        COALESCE(c.nombre, e.nombre_receptor),
                        COALESCE(c.telefono, e.telefono_receptor),
                        CASE WHEN e.id_entrega IS NULL THEN NULL ELSE
@@ -687,12 +702,18 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                   FROM pedidos p
                   LEFT JOIN clientes c ON c.id_cliente = p.id_cliente
                   LEFT JOIN entregas_pedido e ON e.id_pedido = p.id_pedido
+                  LEFT JOIN LATERAL (
+                      SELECT MIN(h.cambiado_en) AS iniciado_en
+                        FROM historial_estados_pedido h
+                       WHERE h.id_pedido = p.id_pedido
+                         AND h.estado_nuevo = 'en_preparacion'
+                  ) cocina ON TRUE
                  WHERE p.pendiente_impresion = TRUE
                    AND p.impreso_en IS NULL
                    AND p.estado = 'en_preparacion'
                    AND p.impresion_reintentar_en <= NOW()
                    AND (p.impresion_tomada_en IS NULL OR p.impresion_tomada_en < NOW() - INTERVAL '2 minutes')
-                 ORDER BY p.creado_en, p.id_pedido
+                 ORDER BY iniciado_en, p.id_pedido
                  LIMIT 1
                  FOR UPDATE OF p SKIP LOCKED;
                 """;

@@ -176,17 +176,30 @@ public sealed class PostgresAdminStore(NpgsqlDataSource dataSource) : IAdminStor
         var metrics=new List<AdminKitchenMetric>();var products=new List<AdminKitchenProductMetric>();if(shiftId is not null)
         {
             await using(var command=connection.CreateCommand()){command.CommandText="""
-                SELECT tipo_entrega,
-                       COUNT(*) FILTER(WHERE estado='en_preparacion'),
-                       COUNT(*) FILTER(WHERE listo_en IS NOT NULL),
-                       AVG(EXTRACT(EPOCH FROM (listo_en-creado_en))/60.0) FILTER(WHERE listo_en IS NOT NULL),
-                       MAX(EXTRACT(EPOCH FROM (listo_en-creado_en))/60.0) FILTER(WHERE listo_en IS NOT NULL),
-                       COUNT(*) FILTER(WHERE listo_en IS NOT NULL AND listo_en-creado_en > make_interval(mins=>@target))
-                  FROM pedidos WHERE id_turno=@shift AND estado<>'cancelado' GROUP BY tipo_entrega ORDER BY tipo_entrega;
+                SELECT p.tipo_entrega,
+                       COUNT(*) FILTER(WHERE p.estado='en_preparacion'),
+                       COUNT(*) FILTER(WHERE p.listo_en IS NOT NULL),
+                       AVG(EXTRACT(EPOCH FROM (p.listo_en-COALESCE(cocina.iniciado_en,p.creado_en)))/60.0) FILTER(WHERE p.listo_en IS NOT NULL),
+                       MAX(EXTRACT(EPOCH FROM (p.listo_en-COALESCE(cocina.iniciado_en,p.creado_en)))/60.0) FILTER(WHERE p.listo_en IS NOT NULL),
+                       COUNT(*) FILTER(WHERE p.listo_en IS NOT NULL AND p.listo_en-COALESCE(cocina.iniciado_en,p.creado_en) > make_interval(mins=>@target))
+                  FROM pedidos p
+                  LEFT JOIN LATERAL (
+                      SELECT MIN(h.cambiado_en) AS iniciado_en
+                        FROM historial_estados_pedido h
+                       WHERE h.id_pedido=p.id_pedido AND h.estado_nuevo='en_preparacion'
+                  ) cocina ON TRUE
+                 WHERE p.id_turno=@shift AND p.estado<>'cancelado'
+                 GROUP BY p.tipo_entrega ORDER BY p.tipo_entrega;
                 """;command.Parameters.AddWithValue("shift",shiftId.Value);command.Parameters.AddWithValue("target",target);await using var reader=await command.ExecuteReaderAsync(cancellationToken);while(await reader.ReadAsync(cancellationToken))metrics.Add(new(reader.GetString(0),Convert.ToInt32(reader.GetInt64(1)),Convert.ToInt32(reader.GetInt64(2)),reader.IsDBNull(3)?null:reader.GetDouble(3),reader.IsDBNull(4)?null:reader.GetDouble(4),Convert.ToInt32(reader.GetInt64(5))));}
             await using(var command=connection.CreateCommand()){command.CommandText="""
-                SELECT d.nombre_producto,COUNT(DISTINCT p.id_pedido),AVG(EXTRACT(EPOCH FROM(p.listo_en-p.creado_en))/60.0)
+                SELECT d.nombre_producto,COUNT(DISTINCT p.id_pedido),
+                       AVG(EXTRACT(EPOCH FROM(p.listo_en-COALESCE(cocina.iniciado_en,p.creado_en)))/60.0)
                   FROM pedidos p JOIN detalle_pedidos d ON d.id_pedido=p.id_pedido
+                  LEFT JOIN LATERAL (
+                      SELECT MIN(h.cambiado_en) AS iniciado_en
+                        FROM historial_estados_pedido h
+                       WHERE h.id_pedido=p.id_pedido AND h.estado_nuevo='en_preparacion'
+                  ) cocina ON TRUE
                  WHERE p.id_turno=@shift AND p.listo_en IS NOT NULL GROUP BY d.nombre_producto ORDER BY 3 DESC LIMIT 10;
                 """;command.Parameters.AddWithValue("shift",shiftId.Value);await using var reader=await command.ExecuteReaderAsync(cancellationToken);while(await reader.ReadAsync(cancellationToken))products.Add(new(reader.GetString(0),Convert.ToInt32(reader.GetInt64(1)),reader.GetDouble(2)));}
         }

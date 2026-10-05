@@ -43,6 +43,16 @@ public sealed class WhatsAppConversationService(
             return;
         }
 
+        var input = (incoming.SelectionId ?? incoming.Text ?? string.Empty).Trim();
+        input = ResolveTextMenuSelection(registration.Context, input);
+        var normalized = input.ToLowerInvariant();
+
+        if (normalized is "pedido" or "carrito" or "cart:show")
+        {
+            await ShowCartAsync(registration.ConversationId, incoming.WaId, cancellationToken);
+            return;
+        }
+
         if (!await store.IsStoreOpenAsync(cancellationToken))
         {
             await SendAsync(
@@ -53,10 +63,6 @@ public sealed class WhatsAppConversationService(
                 cancellationToken);
             return;
         }
-
-        var input = (incoming.SelectionId ?? incoming.Text ?? string.Empty).Trim();
-        input = ResolveTextMenuSelection(registration.Context, input);
-        var normalized = input.ToLowerInvariant();
 
         if (normalized is "menu" or "menú" or "inicio")
         {
@@ -81,12 +87,6 @@ public sealed class WhatsAppConversationService(
             {
                 await AskDeliveryTypeAsync(registration.ConversationId, incoming.WaId, cancellationToken);
             }
-            return;
-        }
-
-        if (normalized is "pedido" or "carrito" or "cart:show")
-        {
-            await ShowCartAsync(registration.ConversationId, incoming.WaId, cancellationToken);
             return;
         }
 
