@@ -16,6 +16,7 @@ public static class DependencyInjection
     {
         services.Configure<DatabaseOptions>(configuration.GetSection(DatabaseOptions.SectionName));
         services.Configure<WhatsAppOptions>(configuration.GetSection(WhatsAppOptions.SectionName));
+        services.Configure<TwilioOptions>(configuration.GetSection(TwilioOptions.SectionName));
         services.Configure<AuthOptions>(configuration.GetSection(AuthOptions.SectionName));
 
         services.AddSingleton(provider =>
@@ -41,7 +42,16 @@ public static class DependencyInjection
         services.AddScoped<IAuthStore, PostgresAuthStore>();
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddSingleton<IWebhookSignatureValidator, MetaWebhookSignatureValidator>();
-        services.AddHttpClient<IWhatsAppMessageSender, MetaWhatsAppMessageSender>();
+        services.AddSingleton<TwilioWebhookSignatureValidator>();
+        services.AddHttpClient<MetaWhatsAppMessageSender>();
+        services.AddHttpClient<TwilioWhatsAppMessageSender>();
+        services.AddScoped<IWhatsAppMessageSender>(provider =>
+        {
+            var settings = provider.GetRequiredService<IOptions<WhatsAppOptions>>().Value;
+            return settings.Provider.Equals("Twilio", StringComparison.OrdinalIgnoreCase)
+                ? provider.GetRequiredService<TwilioWhatsAppMessageSender>()
+                : provider.GetRequiredService<MetaWhatsAppMessageSender>();
+        });
         return services;
     }
 }

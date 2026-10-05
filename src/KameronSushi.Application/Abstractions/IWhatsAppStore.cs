@@ -7,6 +7,7 @@ public interface IWhatsAppStore
     Task<ConversationRegistration> RegisterInboundAsync(IncomingWhatsAppMessage message, CancellationToken cancellationToken);
     Task MarkInboundProcessedAsync(string providerMessageId, CancellationToken cancellationToken);
     Task UpdateConversationAsync(long conversationId, string step, IReadOnlyDictionary<string, string?> contextChanges, CancellationToken cancellationToken);
+    Task UpdateConversationContextAsync(long conversationId, IReadOnlyDictionary<string, string?> contextChanges, CancellationToken cancellationToken);
     Task<IReadOnlyDictionary<string, string>> GetConversationContextAsync(long conversationId, CancellationToken cancellationToken);
     Task<IReadOnlyList<MenuCategory>> GetCategoriesAsync(CancellationToken cancellationToken);
     Task<IReadOnlyList<MenuProduct>> GetProductsAsync(long categoryId, CancellationToken cancellationToken);

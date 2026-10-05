@@ -91,6 +91,22 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task UpdateConversationContextAsync(
+        long conversationId,
+        IReadOnlyDictionary<string, string?> contextChanges,
+        CancellationToken cancellationToken)
+    {
+        const string sql = """
+            UPDATE conversaciones_whatsapp
+            SET contexto = jsonb_strip_nulls(contexto || @changes::jsonb)
+            WHERE id_conversacion = @conversation_id;
+            """;
+        await using var command = dataSource.CreateCommand(sql);
+        command.Parameters.AddWithValue("changes", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(contextChanges));
+        command.Parameters.AddWithValue("conversation_id", conversationId);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyDictionary<string, string>> GetConversationContextAsync(long conversationId, CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand(

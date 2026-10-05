@@ -3,6 +3,7 @@ namespace KameronSushi.Infrastructure.Configuration;
 public sealed class WhatsAppOptions
 {
     public const string SectionName = "WhatsApp";
+    public string Provider { get; init; } = "Meta";
     public string ApiVersion { get; init; } = "v26.0";
     public string GraphApiBaseUrl { get; init; } = "https://graph.facebook.com";
     public string PhoneNumberId { get; init; } = string.Empty;

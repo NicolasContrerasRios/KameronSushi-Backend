@@ -71,6 +71,10 @@ WhatsApp__BusinessAccountId
 WhatsApp__AccessToken
 WhatsApp__VerifyToken
 WhatsApp__AppSecret
+WhatsApp__Provider
+Twilio__AccountSid
+Twilio__AuthToken
+Twilio__WhatsAppNumber
 Auth__BootstrapKey
 ```
 
@@ -100,6 +104,30 @@ El webhook público es `https://TU-DOMINIO/webhooks/whatsapp`.
 4. Meta firma los POST con `X-Hub-Signature-256`; el backend rechaza solicitudes sin una firma HMAC-SHA256 válida.
 
 La integración saliente usa Graph API `v26.0`, configurable mediante `WhatsApp:ApiVersion`.
+
+## Configurar Twilio Sandbox para WhatsApp
+
+Para usar Twilio en lugar de Meta configura `WhatsApp__Provider=Twilio`. En Render también deben existir:
+
+```text
+Twilio__AccountSid
+Twilio__AuthToken
+Twilio__WhatsAppNumber=whatsapp:+14155238886
+```
+
+Usa el número exacto mostrado por el Sandbox. En **Try out WhatsApp > Inbound > Auto-Reply > Custom** configura:
+
+```text
+POST https://kameronsushi-backend.onrender.com/webhooks/twilio/whatsapp
+```
+
+Opcionalmente, configura los estados de entrega en:
+
+```text
+POST https://kameronsushi-backend.onrender.com/webhooks/twilio/whatsapp/status
+```
+
+El backend valida `X-Twilio-Signature` con `Twilio__AuthToken`; no admite webhooks sin firma válida. Los botones y listas se convierten en opciones numeradas para que el Sandbox pueda ejecutar el flujo completo mediante mensajes de texto. Meta continúa disponible usando `WhatsApp__Provider=Meta`.
 
 ## Flujo disponible
 
@@ -218,5 +246,7 @@ WhatsApp__AccessToken
 WhatsApp__VerifyToken
 WhatsApp__AppSecret
 ```
+
+Para Twilio reemplaza las tres credenciales de Meta por `WhatsApp__Provider=Twilio`, `Twilio__AccountSid`, `Twilio__AuthToken` y `Twilio__WhatsAppNumber`.
 
 Render termina HTTPS en su proxy y reenvía el protocolo original mediante cabeceras `X-Forwarded-*`, que la API procesa antes de atender el webhook.

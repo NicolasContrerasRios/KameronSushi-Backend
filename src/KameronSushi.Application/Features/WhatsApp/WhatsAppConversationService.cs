@@ -35,6 +35,7 @@ public sealed class WhatsAppConversationService(
         }
 
         var input = (incoming.SelectionId ?? incoming.Text ?? string.Empty).Trim();
+        input = ResolveTextMenuSelection(registration.Context, input);
         var normalized = input.ToLowerInvariant();
 
         if (normalized is "menu" or "menú" or "inicio")
@@ -503,6 +504,7 @@ public sealed class WhatsAppConversationService(
 
         try
         {
+            await StoreTextMenuOptionsAsync(conversationId, message, cancellationToken);
             var providerId = await sender.SendAsync(waId, message, cancellationToken);
             await store.RecordOutgoingAsync(conversationId, providerId, type, content, true, null, cancellationToken);
         }
@@ -510,6 +512,43 @@ public sealed class WhatsAppConversationService(
         {
             await store.RecordOutgoingAsync(conversationId, null, type, content, false, exception.Message, cancellationToken);
         }
+    }
+
+    private async Task StoreTextMenuOptionsAsync(
+        long conversationId,
+        OutgoingWhatsAppMessage message,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string>? optionIds = message switch
+        {
+            ButtonsWhatsAppMessage buttons => buttons.Buttons.Select(button => button.Id).ToArray(),
+            ListWhatsAppMessage list => list.Rows.Select(row => row.Id).ToArray(),
+            _ => null
+        };
+        if (optionIds is null)
+        {
+            return;
+        }
+
+        var changes = Enumerable.Range(1, 10)
+            .ToDictionary(index => $"textOption{index}", _ => (string?)null);
+        for (var index = 0; index < optionIds.Count && index < 10; index++)
+        {
+            changes[$"textOption{index + 1}"] = optionIds[index];
+        }
+
+        await store.UpdateConversationContextAsync(conversationId, changes, cancellationToken);
+    }
+
+    private static string ResolveTextMenuSelection(
+        IReadOnlyDictionary<string, string> context,
+        string input)
+    {
+        return int.TryParse(input, NumberStyles.None, CultureInfo.InvariantCulture, out var optionNumber) &&
+               optionNumber is >= 1 and <= 10 &&
+               context.TryGetValue($"textOption{optionNumber}", out var optionId)
+            ? optionId
+            : input;
     }
 
     private static IReadOnlyList<WhatsAppListRow> PageRows<T>(
