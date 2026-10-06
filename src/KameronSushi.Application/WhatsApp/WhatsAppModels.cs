@@ -35,7 +35,11 @@ public sealed record CartSummary(long OrderId, IReadOnlyList<string> Lines, deci
 
 public sealed record WhatsAppButton(string Id, string Title);
 
-public sealed record WhatsAppListRow(string Id, string Title, string? Description = null);
+public sealed record WhatsAppListRow(
+    string Id,
+    string Title,
+    string? Description = null,
+    string? GroupTitle = null);
 
 public abstract record OutgoingWhatsAppMessage;
 

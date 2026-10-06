@@ -13,10 +13,10 @@ public static class TwilioMessageTextRenderer
             TextWhatsAppMessage text => text.Body,
             ButtonsWhatsAppMessage buttons => RenderOptions(
                 buttons.Body,
-                buttons.Buttons.Select(button => (button.Title, (string?)null))),
+                buttons.Buttons.Select(button => (button.Title, (string?)null, (string?)null))),
             ListWhatsAppMessage list => RenderOptions(
                 list.Body,
-                list.Rows.Select(row => (row.Title, row.Description))),
+                list.Rows.Select(row => (row.Title, row.Description, row.GroupTitle))),
             _ => throw new ArgumentOutOfRangeException(nameof(message))
         };
 
@@ -30,12 +30,27 @@ public static class TwilioMessageTextRenderer
 
     private static string RenderOptions(
         string body,
-        IEnumerable<(string Title, string? Description)> options)
+        IEnumerable<(string Title, string? Description, string? GroupTitle)> options)
     {
-        var lines = options.Select((option, index) =>
-            option.Description is null
+        var lines = new List<string>();
+        string? currentGroup = null;
+        foreach (var (option, index) in options.Select((value, index) => (value, index)))
+        {
+            if (option.GroupTitle is not null && option.GroupTitle != currentGroup)
+            {
+                if (lines.Count > 0)
+                {
+                    lines.Add(string.Empty);
+                }
+                lines.Add($"*{option.GroupTitle}*");
+                currentGroup = option.GroupTitle;
+            }
+
+            lines.Add(option.Description is null
                 ? $"{index + 1}. {option.Title}"
                 : $"{index + 1}. {option.Title} — {option.Description}");
+        }
+
         return $"{body}\n\n{string.Join("\n", lines)}\n\nResponde con el número de una opción.";
     }
 }

@@ -96,19 +96,18 @@ public sealed class MetaWhatsAppMessageSender(
                 action = new
                 {
                     button = list.ButtonText,
-                    sections = new[]
-                    {
-                        new
+                    sections = list.Rows
+                        .GroupBy(row => row.GroupTitle ?? list.SectionTitle)
+                        .Select(section => new
                         {
-                            title = list.SectionTitle,
-                            rows = list.Rows.Select(row => new
+                            title = section.Key,
+                            rows = section.Select(row => new
                             {
                                 id = row.Id,
                                 title = row.Title,
                                 description = row.Description
                             })
-                        }
-                    }
+                        })
                 }
             }
         },

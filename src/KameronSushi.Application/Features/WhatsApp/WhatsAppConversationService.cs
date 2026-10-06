@@ -120,7 +120,7 @@ public sealed class WhatsAppConversationService(
                 await HandleWrappingAsync(registration.ConversationId, incoming.WaId, normalized, cancellationToken);
                 break;
             case "seleccionando_salsa":
-                await HandleSauceAsync(registration.ConversationId, incoming.WaId, normalized, cancellationToken);
+                await HandleSauceAsync(registration, incoming.WaId, normalized, cancellationToken);
                 break;
             case "seleccionando_cantidad":
                 await HandleQuantityAsync(registration, incoming, normalized, cancellationToken);
@@ -366,10 +366,14 @@ public sealed class WhatsAppConversationService(
         var wrappings = await store.GetWrappingsAsync(productId, cancellationToken);
         var rows = PageRows(wrappings, page,
             wrapping => new WhatsAppListRow($"wrap:{wrapping.Id}", Shorten(wrapping.Name, 24),
-                wrapping.ExtraPrice == 0 ? "Sin recargo" : $"+${wrapping.ExtraPrice:N0}"),
-            nextPage => new WhatsAppListRow($"wrappage:{productId}:{nextPage}", "Ver más envolturas"));
+                wrapping.ExtraPrice == 0 ? "Sin costo adicional" : $"Recargo: +${wrapping.ExtraPrice:N0}",
+                wrapping.ExtraPrice == 0 ? "SIN COSTO" : "PREMIUM"),
+            nextPage => new WhatsAppListRow(
+                $"wrappage:{productId}:{nextPage}", "Ver más envolturas", GroupTitle: "MÁS OPCIONES"));
         await SendAsync(conversationId, waId,
-            new ListWhatsAppMessage("Elige la envoltura.", "Ver envolturas", "Envolturas", rows), cancellationToken);
+            new ListWhatsAppMessage(
+                "Elige la envoltura. Las premium agregan el recargo indicado al precio del producto.",
+                "Ver envolturas", "Envolturas", rows), cancellationToken);
     }
 
     private async Task HandleWrappingAsync(long conversationId, string waId, string input, CancellationToken cancellationToken)
@@ -399,25 +403,33 @@ public sealed class WhatsAppConversationService(
             sauces.Take(10).Select(s => new WhatsAppListRow($"sauce:{s.Id}", Shorten(s.Name, 24))).ToArray()), cancellationToken);
     }
 
-    private async Task HandleSauceAsync(long conversationId, string waId, string input, CancellationToken cancellationToken)
+    private async Task HandleSauceAsync(
+        ConversationRegistration registration,
+        string waId,
+        string input,
+        CancellationToken cancellationToken)
     {
         if (!TryParseId(input, "sauce:", out var sauceId))
         {
-            await SendAsync(conversationId, waId, new TextWhatsAppMessage("Selecciona una salsa de la lista."), cancellationToken);
+            await SendAsync(registration.ConversationId, waId,
+                new TextWhatsAppMessage("Selecciona una salsa de la lista."), cancellationToken);
             return;
         }
 
-        await store.UpdateConversationAsync(conversationId, "seleccionando_cantidad",
+        await store.UpdateConversationAsync(registration.ConversationId, "seleccionando_cantidad",
             new Dictionary<string, string?> { ["sauceId"] = sauceId.ToString(CultureInfo.InvariantCulture) }, cancellationToken);
-        await SendAsync(conversationId, waId, new ButtonsWhatsAppMessage(
-            "¿Cuántas unidades quieres agregar?",
-            [new("qty:1", "1"), new("qty:2", "2"), new("qty:3", "3")]), cancellationToken);
+        var productName = registration.Context.TryGetValue("productName", out var storedName)
+            ? storedName
+            : "este producto";
+        await SendAsync(registration.ConversationId, waId, new ButtonsWhatsAppMessage(
+            $"¿Cuántos productos quieres agregar?\nCada unidad corresponde a una preparación completa de *{productName}*, con los mismos ingredientes, envoltura y salsa.",
+            [new("qty:1", "1 producto"), new("qty:2", "2 productos"), new("qty:3", "3 productos")]), cancellationToken);
     }
 
     private async Task AskQuantityAsync(long conversationId, string waId, string name, decimal price, CancellationToken cancellationToken) =>
         await SendAsync(conversationId, waId, new ButtonsWhatsAppMessage(
-            $"{name}\nPrecio: ${price:N0}\n¿Cuántas unidades quieres agregar?",
-            [new("qty:1", "1"), new("qty:2", "2"), new("qty:3", "3")]), cancellationToken);
+            $"{name}\nPrecio por producto: ${price:N0}\n¿Cuántos productos quieres agregar al carrito?",
+            [new("qty:1", "1 producto"), new("qty:2", "2 productos"), new("qty:3", "3 productos")]), cancellationToken);
 
     private async Task HandleQuantityAsync(ConversationRegistration registration, IncomingWhatsAppMessage incoming, string input, CancellationToken cancellationToken)
     {
