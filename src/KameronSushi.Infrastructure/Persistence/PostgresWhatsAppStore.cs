@@ -274,6 +274,7 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
         long? sauceId = null;
         var finalPrice = basePrice;
         string? snapshot = null;
+        string? details = null;
 
         if (requiresConfiguration)
         {
@@ -314,13 +315,14 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
                 envoltura = wrappingName,
                 salsa = sauceName
             });
+            details = $"Opción N.º {optionNumber}: {ingredients} · Envoltura: {wrappingName} · Salsa: {sauceName}";
             await configReader.CloseAsync();
         }
 
         const string detailSql = """
             INSERT INTO detalle_pedidos
-                (id_pedido, id_producto, nombre_producto, cantidad, precio_unitario, tipo_item)
-            VALUES (@order_id, @product_id, @name, @quantity, @price, 'compra')
+                (id_pedido, id_producto, nombre_producto, cantidad, precio_unitario, tipo_item, observaciones)
+            VALUES (@order_id, @product_id, @name, @quantity, @price, 'compra', @details)
             RETURNING id_detalle;
             """;
         await using var detailCommand = new NpgsqlCommand(detailSql, connection, transaction);
@@ -329,6 +331,7 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
         detailCommand.Parameters.AddWithValue("name", productName);
         detailCommand.Parameters.AddWithValue("quantity", quantity);
         detailCommand.Parameters.AddWithValue("price", finalPrice);
+        detailCommand.Parameters.Add("details", NpgsqlDbType.Text).Value = (object?)details ?? DBNull.Value;
         var detailId = (long)(await detailCommand.ExecuteScalarAsync(cancellationToken)
             ?? throw new InvalidOperationException("No se pudo crear el detalle del pedido."));
 
@@ -363,7 +366,7 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
     public async Task<CartSummary?> GetCartAsync(long conversationId, CancellationToken cancellationToken)
     {
         const string sql = """
-            SELECT p.id_pedido, p.total, d.cantidad, d.nombre_producto, d.precio_unitario
+            SELECT p.id_pedido, p.total, d.cantidad, d.nombre_producto, d.precio_unitario, d.observaciones
             FROM pedidos p
             LEFT JOIN detalle_pedidos d ON d.id_pedido = p.id_pedido
             WHERE p.id_conversacion_whatsapp = @conversation_id AND p.estado = 'borrador'
@@ -384,7 +387,9 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
                 var quantity = reader.GetInt32(2);
                 var name = reader.GetString(3);
                 var unitPrice = reader.GetDecimal(4);
-                lines.Add($"• {quantity} × {name}: ${quantity * unitPrice:N0}");
+                var details = reader.IsDBNull(5) ? null : reader.GetString(5);
+                var configuration = string.IsNullOrWhiteSpace(details) ? string.Empty : $"\n  {details}";
+                lines.Add($"• {quantity} × {name}: ${quantity * unitPrice:N0}{configuration}");
             }
         }
         return orderId is null ? null : new CartSummary(orderId.Value, lines, total);
