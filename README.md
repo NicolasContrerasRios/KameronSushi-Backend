@@ -218,7 +218,7 @@ Al iniciar, el backend registra y aplica sus migraciones pendientes en la tabla 
 | `GET` | `/api/admin/shifts` | Lista turnos con responsable, pedidos, ventas y diferencia de caja. |
 | `GET` | `/api/admin/archives/months` | Lista los meses completos disponibles y señala cuáles ya pueden depurarse. |
 | `GET` | `/api/admin/archives/{year}/{month}` | Genera el archivo mensual y entrega su SHA-256 en la cabecera `X-Archive-Sha256`. |
-| `POST` | `/api/admin/archives/{year}/{month}/confirm` | Confirma que el archivo fue guardado y depura el período cuando ya tiene más de tres meses completos. |
+| `POST` | `/api/admin/archives/{year}/{month}/confirm` | Confirma el archivo; limpia mensajes después de 60 días y ventas después de tres meses completos. |
 | `GET` | `/api/admin/kitchen/dashboard` | Entrega rendimiento de cocina por turno, canal y producto. |
 | `PUT` | `/api/admin/kitchen/target` | Configura el objetivo de minutos de preparación. |
 
@@ -232,9 +232,11 @@ Las migraciones `009_order_lifecycle` y `010_direct_kitchen_preparation` crean e
 
 ## Archivo mensual y retención
 
-La migración `012_monthly_archives` habilita el archivo mensual. Los períodos se cortan con la zona horaria `America/Santiago`. La aplicación conserva en PostgreSQL el mes en curso y los tres meses completos anteriores; por ejemplo, durante octubre puede depurar junio y meses anteriores.
+Las migraciones `012_monthly_archives` y `013_archive_retention_policy` habilitan el archivo mensual. Los períodos se cortan con la zona horaria `America/Santiago`. La aplicación conserva en PostgreSQL el mes en curso y los tres meses completos anteriores; por ejemplo, durante octubre puede depurar junio y meses anteriores. Los mensajes de WhatsApp se eliminan por mes cuando el período completo supera 60 días, después de confirmar su respaldo.
 
-La depuración usa dos pasos. Primero la aplicación descarga el JSON mensual, comprueba el SHA-256 enviado por la API y lo guarda comprimido. Después confirma el mismo hash. El backend rechaza la operación si la preparación tiene más de una hora, si el hash cambió, si el período aún está retenido o si existen pedidos o turnos activos. Usuarios, clientes, catálogo, saldos y movimientos de fidelización permanecen en PostgreSQL.
+La depuración usa dos pasos. Primero la aplicación descarga el JSON mensual, comprueba el SHA-256 enviado por la API y lo guarda comprimido. Después confirma el mismo hash. El archivo versión 2 contiene turnos, caja, pedidos, detalles, pagos, historial de estados, delivery, configuración de rolls, checkouts, eventos de pago y todos los campos operativos de WhatsApp. El backend rechaza la operación si la preparación tiene más de una hora, si el hash cambió, si el período aún está retenido o si existen pedidos o turnos activos. Usuarios, clientes, catálogo, saldos y movimientos de fidelización permanecen en PostgreSQL.
+
+Al confirmar archivos también se eliminan sesiones expiradas o revocadas con más de 30 días y eventos huérfanos ya procesados con más de 90 días. Los mensajes posteriores vinculados a un pedido antiguo no se pierden: al depurar el pedido solo se elimina el vínculo, y el mensaje se archiva en el mes en que fue creado.
 
 Los `DELETE` dejan espacio reutilizable dentro de PostgreSQL. El autovacuum recupera ese espacio para escrituras futuras; el tamaño físico del archivo no necesariamente disminuye de inmediato. No se ejecuta `VACUUM FULL` automáticamente porque bloquea tablas y no corresponde hacerlo durante la jornada.
 

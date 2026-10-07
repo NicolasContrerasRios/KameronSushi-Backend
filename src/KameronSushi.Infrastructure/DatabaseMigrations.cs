@@ -377,6 +377,24 @@ public static class DatabaseMigrations
             await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        if (!await IsAppliedAsync(connection, transaction, "013_archive_retention_policy", cancellationToken))
+        {
+            await using var migrationCommand = connection.CreateCommand();
+            migrationCommand.Transaction = transaction;
+            migrationCommand.CommandText = """
+                ALTER TABLE archivos_mensuales
+                    ADD COLUMN IF NOT EXISTS version_esquema INTEGER NOT NULL DEFAULT 1,
+                    ADD COLUMN IF NOT EXISTS mensajes_purgados_en TIMESTAMPTZ;
+                UPDATE archivos_mensuales
+                   SET confirmado_en=NULL, confirmado_por=NULL
+                 WHERE version_esquema<2 AND purgado_en IS NULL;
+                CREATE INDEX IF NOT EXISTS ix_eventos_pagos_archivo_recibido
+                    ON eventos_pagos(recibido_en) WHERE id_pago IS NULL;
+                INSERT INTO schema_migrations(id) VALUES('013_archive_retention_policy');
+                """;
+            await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
     }
 
