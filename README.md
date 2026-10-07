@@ -115,11 +115,13 @@ Twilio__AuthToken
 Twilio__WhatsAppNumber=whatsapp:+14155238886
 ```
 
-Usa el número exacto mostrado por el Sandbox. En **Try out WhatsApp > Inbound > Auto-Reply > Custom** configura:
+Usa el número exacto mostrado por el Sandbox. La configuración directa, sin contingencia, es:
 
 ```text
 POST https://kameronsushi-backend.onrender.com/webhooks/twilio/whatsapp
 ```
+
+Para que el cliente reciba un aviso incluso cuando Render esté caído, usa la Twilio Function incluida en [`twilio/functions/whatsapp-emergency-proxy.protected.js`](twilio/functions/whatsapp-emergency-proxy.protected.js). Después de desplegarla, configura su URL como **When a message comes in**. La Function reenvía el mensaje al backend con una firma nueva y responde con el aviso de emergencia si el backend falla. Las instrucciones están en [`twilio/README.md`](twilio/README.md).
 
 Opcionalmente, configura los estados de entrega en:
 
