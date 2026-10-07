@@ -221,6 +221,12 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         if (payments.Any(payment => payment.Amount <= 0)) throw new ArgumentException("Los pagos deben ser mayores que cero.");
         if (payments.Any(payment => string.IsNullOrWhiteSpace(payment.Method))) throw new ArgumentException("Cada pago debe indicar un método.");
         if (rewardItems.Count > 0 && command.CustomerId is null) throw new ArgumentException("Selecciona un cliente para canjear puntos.");
+        if (command.IsOfflineSale && command.ClientOrderId is null)
+            throw new ArgumentException("Una venta offline debe incluir su identificador de operación.");
+        if (command.IsOfflineSale && rewardItems.Count > 0)
+            throw new ArgumentException("Los canjes de puntos no se pueden registrar offline.");
+        if (command.IsOfflineSale && purchaseItems.Any(item => item.UnitPrice is null or < 0 or > 10_000_000))
+            throw new ArgumentException("Cada producto de una venta offline debe incluir un precio válido.");
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
@@ -251,7 +257,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         var validatedItems = new List<ValidatedItem>();
         foreach (var item in purchaseItems)
         {
-            validatedItems.Add(await ValidateItemAsync(connection, transaction, item, cancellationToken));
+            validatedItems.Add(await ValidateItemAsync(
+                connection, transaction, item, command.IsOfflineSale, cancellationToken));
         }
 
         if (command.CustomerId is not null && !await CustomerExistsAsync(connection, transaction, command.CustomerId.Value, cancellationToken))
@@ -1199,6 +1206,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         CreateLocalOrderItem item,
+        bool useOfflineSnapshot,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
@@ -1209,17 +1217,22 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                    pe.precio_adicional, e.nombre, s.nombre, p.descripcion
               FROM productos p
               LEFT JOIN opciones_roll o
-                ON o.id_opcion_roll = @option_id AND o.id_producto = p.id_producto AND o.activa = TRUE
+                ON o.id_opcion_roll = @option_id AND o.id_producto = p.id_producto
+               AND (@historical = TRUE OR o.activa = TRUE)
               LEFT JOIN producto_envolturas pe
                 ON pe.id_producto_envoltura = @wrapper_id AND pe.id_producto = p.id_producto
-              LEFT JOIN envolturas e ON e.id_envoltura = pe.id_envoltura AND e.activa = TRUE
-              LEFT JOIN salsas s ON s.id_salsa = @sauce_id AND s.activa = TRUE
-             WHERE p.id_producto = @product_id AND p.activo = TRUE AND p.disponible = TRUE;
+              LEFT JOIN envolturas e
+                ON e.id_envoltura = pe.id_envoltura AND (@historical = TRUE OR e.activa = TRUE)
+              LEFT JOIN salsas s
+                ON s.id_salsa = @sauce_id AND (@historical = TRUE OR s.activa = TRUE)
+             WHERE p.id_producto = @product_id
+               AND (@historical = TRUE OR (p.activo = TRUE AND p.disponible = TRUE));
             """;
         command.Parameters.AddWithValue("product_id", item.ProductId);
         command.Parameters.Add("option_id", NpgsqlDbType.Bigint).Value = (object?)item.OptionId ?? DBNull.Value;
         command.Parameters.Add("wrapper_id", NpgsqlDbType.Bigint).Value = (object?)item.ProductWrapperId ?? DBNull.Value;
         command.Parameters.Add("sauce_id", NpgsqlDbType.Bigint).Value = (object?)item.SauceId ?? DBNull.Value;
+        command.Parameters.AddWithValue("historical", useOfflineSnapshot);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken))
         {
@@ -1236,7 +1249,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                 throw new ArgumentException($"El producto {name} no admite configuración de roll.");
             }
             var description = reader.IsDBNull(9) ? null : reader.GetString(9);
-            return new ValidatedItem(item.ProductId, name, item.Quantity, basePrice, false,
+            var unitPrice = useOfflineSnapshot ? item.UnitPrice!.Value : basePrice;
+            return new ValidatedItem(item.ProductId, name, item.Quantity, unitPrice, false,
                 null, null, null, null, null, null, null, description);
         }
 
@@ -1257,7 +1271,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         var wrapperName = reader.GetString(7);
         var sauceName = reader.GetString(8);
         var details = $"N.º {optionNumber} · {ingredients} · Envoltura: {wrapperName} · Salsa: {sauceName}";
-        return new ValidatedItem(item.ProductId, name, item.Quantity, basePrice + wrapperPrice, true,
+        var configuredPrice = useOfflineSnapshot ? item.UnitPrice!.Value : basePrice + wrapperPrice;
+        return new ValidatedItem(item.ProductId, name, item.Quantity, configuredPrice, true,
             item.OptionId, item.ProductWrapperId, item.SauceId, optionNumber, ingredients, wrapperName, sauceName, details);
     }
 

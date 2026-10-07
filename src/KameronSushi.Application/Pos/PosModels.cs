@@ -41,7 +41,8 @@ public sealed record CreateLocalOrder(
     IReadOnlyList<CreateLocalPayment> Payments,
     long? CustomerId = null,
     IReadOnlyList<CreateRewardItem>? Rewards = null,
-    Guid? ClientOrderId = null);
+    Guid? ClientOrderId = null,
+    bool IsOfflineSale = false);
 
 public sealed record CancelOrder(string Reason);
 
@@ -60,7 +61,8 @@ public sealed record CreateLocalOrderItem(
     long? OptionId,
     long? ProductWrapperId,
     long? SauceId,
-    int Quantity = 1);
+    int Quantity = 1,
+    decimal? UnitPrice = null);
 
 public sealed record CreateLocalPayment(string Method, decimal Amount);
 
