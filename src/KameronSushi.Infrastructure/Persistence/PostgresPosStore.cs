@@ -226,6 +226,25 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         await SetAuditContextAsync(connection, transaction, userId, "caja", null, cancellationToken);
 
+        if (command.ClientOrderId is Guid clientOrderId)
+        {
+            await using (var lockCommand = connection.CreateCommand())
+            {
+                lockCommand.Transaction = transaction;
+                lockCommand.CommandText = "SELECT pg_advisory_xact_lock(hashtextextended(@client_order_id::text, 0));";
+                lockCommand.Parameters.AddWithValue("client_order_id", clientOrderId);
+                await lockCommand.ExecuteNonQueryAsync(cancellationToken);
+            }
+
+            var existingOrder = await GetCreatedOrderByClientIdAsync(
+                connection, transaction, clientOrderId, cancellationToken);
+            if (existingOrder is not null)
+            {
+                await transaction.CommitAsync(cancellationToken);
+                return existingOrder;
+            }
+        }
+
         var shiftId = await GetOpenShiftIdAsync(connection, transaction, cancellationToken)
             ?? throw new ArgumentException("No hay un turno de caja abierto. Inicia el turno antes de crear pedidos.");
 
@@ -269,13 +288,19 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         {
             orderCommand.Transaction = transaction;
             orderCommand.CommandText = """
-                INSERT INTO pedidos (id_cliente, id_turno, estado, subtotal, descuento, tipo_entrega, canal_origen, costo_envio)
-                VALUES (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, 'retiro', 'local', 0)
+                INSERT INTO pedidos
+                    (id_cliente, id_turno, estado, subtotal, descuento, tipo_entrega, canal_origen,
+                     costo_envio, id_operacion_cliente)
+                VALUES
+                    (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, 'retiro', 'local',
+                     0, @client_order_id)
                 RETURNING id_pedido, creado_en;
                 """;
             orderCommand.Parameters.AddWithValue("subtotal", subtotal);
             orderCommand.Parameters.AddWithValue("shift_id", shiftId);
             orderCommand.Parameters.Add("customer_id", NpgsqlDbType.Bigint).Value = (object?)command.CustomerId ?? DBNull.Value;
+            orderCommand.Parameters.Add("client_order_id", NpgsqlDbType.Uuid).Value =
+                (object?)command.ClientOrderId ?? DBNull.Value;
             await using var reader = await orderCommand.ExecuteReaderAsync(cancellationToken);
             await reader.ReadAsync(cancellationToken);
             orderId = reader.GetInt64(0);
@@ -398,6 +423,34 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
 
         await transaction.CommitAsync(cancellationToken);
         return new CreatedOrder(orderId, subtotal, paid, Math.Max(paid - subtotal, 0), createdAt, remainingPoints);
+    }
+
+    private static async Task<CreatedOrder?> GetCreatedOrderByClientIdAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid clientOrderId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            SELECT p.id_pedido, p.total,
+                   COALESCE(SUM(pg.monto) FILTER (WHERE pg.estado = 'aprobado'), 0) AS pagado,
+                   p.creado_en, cf.saldo_puntos
+              FROM pedidos p
+              LEFT JOIN pagos pg ON pg.id_pedido = p.id_pedido
+              LEFT JOIN cuentas_fidelizacion cf ON cf.id_cliente = p.id_cliente
+             WHERE p.id_operacion_cliente = @client_order_id
+             GROUP BY p.id_pedido, cf.saldo_puntos;
+            """;
+        command.Parameters.AddWithValue("client_order_id", clientOrderId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        if (!await reader.ReadAsync(cancellationToken)) return null;
+        var total = reader.GetDecimal(1);
+        var paid = reader.GetDecimal(2);
+        return new CreatedOrder(
+            reader.GetInt64(0), total, paid, Math.Max(paid - total, 0),
+            reader.GetFieldValue<DateTimeOffset>(3), reader.IsDBNull(4) ? null : reader.GetInt32(4));
     }
 
     public async Task<IReadOnlyList<PosOrderSummary>> GetOrdersAsync(

@@ -40,7 +40,8 @@ public sealed record CreateLocalOrder(
     IReadOnlyList<CreateLocalOrderItem> Items,
     IReadOnlyList<CreateLocalPayment> Payments,
     long? CustomerId = null,
-    IReadOnlyList<CreateRewardItem>? Rewards = null);
+    IReadOnlyList<CreateRewardItem>? Rewards = null,
+    Guid? ClientOrderId = null);
 
 public sealed record CancelOrder(string Reason);
 
