@@ -216,6 +216,9 @@ Al iniciar, el backend registra y aplica sus migraciones pendientes en la tabla 
 | `GET` | `/api/admin/customers/{customerId}/points` | Devuelve el historial de movimientos de puntos. |
 | `POST` | `/api/admin/customers/{customerId}/points/adjust` | Ajusta puntos manualmente con motivo y auditoría. |
 | `GET` | `/api/admin/shifts` | Lista turnos con responsable, pedidos, ventas y diferencia de caja. |
+| `GET` | `/api/admin/archives/months` | Lista los meses completos disponibles y señala cuáles ya pueden depurarse. |
+| `GET` | `/api/admin/archives/{year}/{month}` | Genera el archivo mensual y entrega su SHA-256 en la cabecera `X-Archive-Sha256`. |
+| `POST` | `/api/admin/archives/{year}/{month}/confirm` | Confirma que el archivo fue guardado y depura el período cuando ya tiene más de tres meses completos. |
 | `GET` | `/api/admin/kitchen/dashboard` | Entrega rendimiento de cocina por turno, canal y producto. |
 | `PUT` | `/api/admin/kitchen/target` | Configura el objetivo de minutos de preparación. |
 
@@ -226,6 +229,14 @@ La creación de un pedido local exige un turno abierto y guarda su identificador
 La migración `007_kitchen_print_queue` agrega el estado de impresión a `pedidos`. Un trigger en PostgreSQL encola todos los pedidos nuevos que entren en estado `confirmado` o `en_preparacion`, sin depender de que provengan de caja, WhatsApp o delivery. La reserva usa bloqueo `FOR UPDATE SKIP LOCKED`, un token único y un arrendamiento temporal para que varios computadores de cocina no impriman simultáneamente la misma comanda. En la aplicación de escritorio se activa desde **Administración > Impresora > Imprimir comandas de cocina automáticamente**.
 
 Las migraciones `009_order_lifecycle` y `010_direct_kitchen_preparation` crean el historial y aplican las transiciones válidas también en PostgreSQL. Caja y WhatsApp ingresan los pedidos aceptados directamente como `en_preparacion`; Cocina únicamente los marca `listo`. Los estados `listo` y `cancelado` son terminales. Al cancelar un pedido con canjes se restauran los puntos y el stock dentro de la misma transacción.
+
+## Archivo mensual y retención
+
+La migración `012_monthly_archives` habilita el archivo mensual. Los períodos se cortan con la zona horaria `America/Santiago`. La aplicación conserva en PostgreSQL el mes en curso y los tres meses completos anteriores; por ejemplo, durante octubre puede depurar junio y meses anteriores.
+
+La depuración usa dos pasos. Primero la aplicación descarga el JSON mensual, comprueba el SHA-256 enviado por la API y lo guarda comprimido. Después confirma el mismo hash. El backend rechaza la operación si la preparación tiene más de una hora, si el hash cambió, si el período aún está retenido o si existen pedidos o turnos activos. Usuarios, clientes, catálogo, saldos y movimientos de fidelización permanecen en PostgreSQL.
+
+Los `DELETE` dejan espacio reutilizable dentro de PostgreSQL. El autovacuum recupera ese espacio para escrituras futuras; el tamaño físico del archivo no necesariamente disminuye de inmediato. No se ejecuta `VACUUM FULL` automáticamente porque bloquea tablas y no corresponde hacerlo durante la jornada.
 
 Para desarrollo con HTTPS:
 
