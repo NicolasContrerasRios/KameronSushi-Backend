@@ -125,6 +125,9 @@ public sealed class WhatsAppConversationService(
             case "seleccionando_salsa":
                 await HandleSauceAsync(registration, incoming, normalized, cancellationToken);
                 break;
+            case "seleccionando_cantidad_salsa":
+                await HandleSauceQuantityAsync(registration, incoming, normalized, cancellationToken);
+                break;
             case "seleccionando_cantidad":
                 await HandleQuantityAsync(registration, incoming, normalized, cancellationToken);
                 break;
@@ -405,7 +408,7 @@ public sealed class WhatsAppConversationService(
             ? storedName
             : "este producto";
         await SendAsync(conversationId, waId, new ButtonsWhatsAppMessage(
-            $"¿Cuántos productos de *{productName}* quieres agregar?\nLos ingredientes y la envoltura se repetirán. Después elegirás una salsa para cada unidad.\n\nPuedes escribir cualquier cantidad del 1 al 20, por ejemplo: 4, 7 o 12.",
+            $"¿Cuántos productos de *{productName}* quieres agregar?\nLos ingredientes y la envoltura se repetirán. Después podrás distribuir las unidades entre distintas salsas.\n\nPuedes escribir cualquier cantidad del 1 al 20, por ejemplo: 4, 7 o 12.",
             [new("qty:1", "1 producto"), new("qty:2", "2 productos"), new("qty:3", "3 productos")]), cancellationToken);
     }
 
@@ -426,26 +429,31 @@ public sealed class WhatsAppConversationService(
             new Dictionary<string, string?>
             {
                 ["configuredQuantity"] = quantity.ToString(CultureInfo.InvariantCulture),
-                ["currentSauceUnit"] = "1",
-                ["sauceId"] = null
+                ["remainingSauceUnits"] = quantity.ToString(CultureInfo.InvariantCulture),
+                ["selectedSauceId"] = null,
+                ["selectedSauceName"] = null,
+                ["sauceId"] = null,
+                ["currentSauceUnit"] = null
             }, cancellationToken);
         var productName = registration.Context.TryGetValue("productName", out var storedName)
             ? storedName
             : "este producto";
-        await ShowSaucesAsync(registration.ConversationId, waId, productName, 1, quantity, cancellationToken);
+        await ShowSaucesAsync(registration.ConversationId, waId, productName, quantity, quantity, cancellationToken);
     }
 
     private async Task ShowSaucesAsync(
         long conversationId,
         string waId,
         string productName,
-        int currentUnit,
+        int remainingUnits,
         int totalUnits,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? assignmentSummary = null)
     {
         var sauces = await store.GetSaucesAsync(cancellationToken);
+        var prefix = assignmentSummary is null ? string.Empty : $"{assignmentSummary}\n\n";
         await SendAsync(conversationId, waId, new ListWhatsAppMessage(
-            $"Elige la salsa para la unidad {currentUnit} de {totalUnits} de *{productName}*. Puedes elegir una salsa distinta para cada unidad.",
+            $"{prefix}Falta asignar salsa a {remainingUnits} de {totalUnits} unidades de *{productName}*. Elige una salsa y luego indica cuántas unidades la llevarán.",
             "Ver salsas", "Salsas",
             sauces.Take(10).Select(s => new WhatsAppListRow($"sauce:{s.Id}", Shorten(s.Name, 24))).ToArray()), cancellationToken);
     }
@@ -463,38 +471,104 @@ public sealed class WhatsAppConversationService(
             return;
         }
 
-        if (!registration.Context.TryGetValue("configuredQuantity", out var totalValue) ||
-            !int.TryParse(totalValue, NumberStyles.None, CultureInfo.InvariantCulture, out var totalUnits) ||
-            !registration.Context.TryGetValue("currentSauceUnit", out var currentValue) ||
-            !int.TryParse(currentValue, NumberStyles.None, CultureInfo.InvariantCulture, out var currentUnit) ||
-            currentUnit < 1 || currentUnit > totalUnits)
+        if (!TryGetSauceProgress(registration.Context, out var totalUnits, out var remainingUnits))
         {
             await SendAsync(registration.ConversationId, incoming.WaId,
                 new TextWhatsAppMessage("La configuración expiró. Escribe *menú* para elegir nuevamente el producto."), cancellationToken);
             return;
         }
 
+        var sauces = await store.GetSaucesAsync(cancellationToken);
+        var sauce = sauces.FirstOrDefault(value => value.Id == sauceId);
+        if (sauce is null)
+        {
+            await SendAsync(registration.ConversationId, incoming.WaId,
+                new TextWhatsAppMessage("Esa salsa ya no está disponible. Selecciona otra de la lista."), cancellationToken);
+            return;
+        }
+
+        if (remainingUnits == 1)
+        {
+            await AddSauceAllocationAsync(
+                registration, incoming, sauce.Id, sauce.Name, 1, totalUnits, remainingUnits, cancellationToken);
+            return;
+        }
+
+        await store.UpdateConversationAsync(registration.ConversationId, "seleccionando_cantidad_salsa",
+            new Dictionary<string, string?>
+            {
+                ["selectedSauceId"] = sauce.Id.ToString(CultureInfo.InvariantCulture),
+                ["selectedSauceName"] = sauce.Name
+            }, cancellationToken);
+        await SendAsync(registration.ConversationId, incoming.WaId, new ButtonsWhatsAppMessage(
+            $"¿Cuántas de las {remainingUnits} unidades pendientes llevarán *{sauce.Name}*?\nPuedes escribir cualquier número entre 1 y {remainingUnits}.",
+            Enumerable.Range(1, Math.Min(3, remainingUnits))
+                .Select(value => new WhatsAppButton($"qty:{value}", value == 1 ? "1 producto" : $"{value} productos"))
+                .ToArray()), cancellationToken);
+    }
+
+    private async Task HandleSauceQuantityAsync(
+        ConversationRegistration registration,
+        IncomingWhatsAppMessage incoming,
+        string input,
+        CancellationToken cancellationToken)
+    {
+        if (!TryGetSauceProgress(registration.Context, out var totalUnits, out var remainingUnits) ||
+            !registration.Context.TryGetValue("selectedSauceId", out var sauceIdValue) ||
+            !long.TryParse(sauceIdValue, NumberStyles.None, CultureInfo.InvariantCulture, out var sauceId) ||
+            !registration.Context.TryGetValue("selectedSauceName", out var sauceName))
+        {
+            await SendAsync(registration.ConversationId, incoming.WaId,
+                new TextWhatsAppMessage("La distribución de salsas expiró. Escribe *menú* para elegir nuevamente el producto."), cancellationToken);
+            return;
+        }
+
+        if (!TryParseQuantity(input, out var sauceQuantity) || sauceQuantity > remainingUnits)
+        {
+            await SendAsync(registration.ConversationId, incoming.WaId,
+                new TextWhatsAppMessage($"Escribe cuántas unidades llevarán {sauceName}: un número entre 1 y {remainingUnits}."), cancellationToken);
+            return;
+        }
+
+        await AddSauceAllocationAsync(
+            registration, incoming, sauceId, sauceName, sauceQuantity, totalUnits, remainingUnits, cancellationToken);
+    }
+
+    private async Task AddSauceAllocationAsync(
+        ConversationRegistration registration,
+        IncomingWhatsAppMessage incoming,
+        long sauceId,
+        string sauceName,
+        int sauceQuantity,
+        int totalUnits,
+        int remainingUnits,
+        CancellationToken cancellationToken)
+    {
         var itemContext = new Dictionary<string, string>(registration.Context)
         {
             ["sauceId"] = sauceId.ToString(CultureInfo.InvariantCulture)
         };
         var cart = await store.AddToCartAsync(
-            registration.ConversationId, incoming, itemContext, 1, cancellationToken);
+            registration.ConversationId, incoming, itemContext, sauceQuantity, cancellationToken);
         var productName = registration.Context.TryGetValue("productName", out var storedName)
             ? storedName
             : "este producto";
+        var nextRemainingUnits = remainingUnits - sauceQuantity;
 
-        if (currentUnit < totalUnits)
+        if (nextRemainingUnits > 0)
         {
-            var nextUnit = currentUnit + 1;
             await store.UpdateConversationAsync(registration.ConversationId, "seleccionando_salsa",
                 new Dictionary<string, string?>
                 {
-                    ["currentSauceUnit"] = nextUnit.ToString(CultureInfo.InvariantCulture),
+                    ["remainingSauceUnits"] = nextRemainingUnits.ToString(CultureInfo.InvariantCulture),
+                    ["selectedSauceId"] = null,
+                    ["selectedSauceName"] = null,
                     ["sauceId"] = null
                 }, cancellationToken);
             await ShowSaucesAsync(
-                registration.ConversationId, incoming.WaId, productName, nextUnit, totalUnits, cancellationToken);
+                registration.ConversationId, incoming.WaId, productName, nextRemainingUnits, totalUnits,
+                cancellationToken,
+                $"Asignaste {sauceQuantity} {(sauceQuantity == 1 ? "unidad" : "unidades")} a *{sauceName}*.");
             return;
         }
 
@@ -502,12 +576,14 @@ public sealed class WhatsAppConversationService(
             new Dictionary<string, string?>
             {
                 ["configuredQuantity"] = null,
-                ["currentSauceUnit"] = null,
+                ["remainingSauceUnits"] = null,
+                ["selectedSauceId"] = null,
+                ["selectedSauceName"] = null,
                 ["sauceId"] = null
             }, cancellationToken);
         var quantityLabel = totalUnits == 1 ? "1 producto" : $"{totalUnits} productos";
         await SendAsync(registration.ConversationId, incoming.WaId, new ButtonsWhatsAppMessage(
-            $"Se agregaron {quantityLabel} de *{productName}*. Total actual: ${cart.Total:N0}",
+            $"Se completó la distribución de salsas para {quantityLabel} de *{productName}*. Total actual: ${cart.Total:N0}",
             [new("menu", "Seguir comprando"), new("cart:show", "Ver pedido"), new("cart:finish", "Finalizar")]), cancellationToken);
     }
 
@@ -695,6 +771,21 @@ public sealed class WhatsAppConversationService(
         var quantityText = input.StartsWith("qty:", StringComparison.Ordinal) ? input[4..] : input;
         return int.TryParse(quantityText, NumberStyles.None, CultureInfo.InvariantCulture, out quantity) &&
                quantity is >= 1 and <= 20;
+    }
+
+    private static bool TryGetSauceProgress(
+        IReadOnlyDictionary<string, string> context,
+        out int totalUnits,
+        out int remainingUnits)
+    {
+        totalUnits = 0;
+        remainingUnits = 0;
+        return context.TryGetValue("configuredQuantity", out var totalValue) &&
+               int.TryParse(totalValue, NumberStyles.None, CultureInfo.InvariantCulture, out totalUnits) &&
+               context.TryGetValue("remainingSauceUnits", out var remainingValue) &&
+               int.TryParse(remainingValue, NumberStyles.None, CultureInfo.InvariantCulture, out remainingUnits) &&
+               totalUnits is >= 1 and <= 20 &&
+               remainingUnits >= 1 && remainingUnits <= totalUnits;
     }
 
     private static bool TryParseProductPage(string input, out long categoryId, out int page)
