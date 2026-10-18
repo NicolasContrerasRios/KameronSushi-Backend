@@ -192,6 +192,9 @@ Al iniciar, el backend registra y aplica sus migraciones pendientes en la tabla 
 | `GET` | `/api/pos/orders/{orderId}` | Devuelve el encabezado, los ítems y los pagos de un pedido. |
 | `GET` | `/api/pos/orders/{orderId}/history` | Devuelve el historial cronológico de estados y responsables. |
 | `POST` | `/api/pos/orders/{orderId}/cancel` | Cancela un pedido activo con motivo, revierte canjes y cancela sus pagos. |
+| `GET` | `/api/customer/availability` | Indica a la aplicación de clientes si existe un turno abierto. No requiere sesión. |
+| `GET` | `/api/customer/catalog` | Entrega a la aplicación de clientes el catálogo vigente. No requiere sesión. |
+| `POST` | `/api/customer/orders` | Recibe pedidos idempotentes desde Android, valida el catálogo y deja el pago al recibir pendiente. No requiere sesión y tiene límite por IP. |
 | `GET` | `/api/kitchen/orders` | Lista los pedidos en preparación para cocina. |
 | `GET` | `/api/kitchen/orders/performance` | Calcula por tipo de entrega el tiempo promedio hasta quedar listo dentro del turno abierto. |
 | `PATCH` | `/api/kitchen/orders/{orderId}/ready` | Pasa un pedido en preparación a listo, su estado final. |

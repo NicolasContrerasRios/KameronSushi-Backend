@@ -142,6 +142,181 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         return products.Select(ToCatalogProduct).ToList();
     }
 
+    public async Task<CreatedOrder> CreateCustomerOrderAsync(
+        CreateCustomerOrder command,
+        CancellationToken cancellationToken)
+    {
+        if (command.ClientOrderId == Guid.Empty)
+            throw new ArgumentException("El identificador de la operación es obligatorio.");
+
+        var items = command.Items ?? [];
+        if (items.Count == 0) throw new ArgumentException("El pedido debe contener al menos un producto.");
+        if (items.Count > 100) throw new ArgumentException("El pedido no puede contener más de 100 líneas.");
+        if (items.Any(item => item.Quantity is <= 0 or > 100))
+            throw new ArgumentException("Cada cantidad debe estar entre 1 y 100.");
+
+        var deliveryType = command.DeliveryType?.Trim().ToLowerInvariant() switch
+        {
+            "retiro" => "retiro",
+            "delivery" => "delivery",
+            _ => throw new ArgumentException("El tipo de entrega debe ser retiro o delivery.")
+        };
+        var paymentMethod = NormalizePaymentMethod(command.PaymentMethod ?? string.Empty);
+        var customerName = RequiredCustomerText(command.Customer?.Name, "nombre", 150);
+        var customerPhone = RequiredCustomerText(command.Customer?.Phone, "teléfono", 20);
+
+        CustomerDeliveryAddress? delivery = null;
+        if (deliveryType == "delivery")
+        {
+            delivery = command.Delivery
+                ?? throw new ArgumentException("La dirección es obligatoria para delivery.");
+            _ = RequiredCustomerText(delivery.Street, "calle", 150);
+            _ = RequiredCustomerText(delivery.Number, "número", 20);
+            _ = RequiredCustomerText(delivery.County, "comuna", 100);
+            if (delivery.Reference?.Length > 1000)
+                throw new ArgumentException("La referencia no puede superar 1000 caracteres.");
+        }
+
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        await SetAuditContextAsync(connection, transaction, null, "app_android", null, cancellationToken);
+
+        await using (var lockCommand = connection.CreateCommand())
+        {
+            lockCommand.Transaction = transaction;
+            lockCommand.CommandText = "SELECT pg_advisory_xact_lock(hashtextextended(@client_order_id::text, 0));";
+            lockCommand.Parameters.AddWithValue("client_order_id", command.ClientOrderId);
+            await lockCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        var existingOrder = await GetCreatedOrderByClientIdAsync(
+            connection, transaction, command.ClientOrderId, cancellationToken);
+        if (existingOrder is not null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return existingOrder;
+        }
+
+        var shiftId = await GetOpenShiftIdAsync(connection, transaction, cancellationToken)
+            ?? throw new ArgumentException("LOCAL_CLOSED: El local está cerrado y no está recibiendo pedidos en este momento.");
+
+        var validatedItems = new List<ValidatedItem>();
+        foreach (var item in items)
+        {
+            validatedItems.Add(await ValidateItemAsync(connection, transaction, item, false, cancellationToken));
+        }
+        var subtotal = validatedItems.Sum(item => item.UnitPrice * item.Quantity);
+        if (subtotal <= 0) throw new ArgumentException("El total del pedido debe ser mayor que cero.");
+
+        var customerId = await GetOrCreateCustomerAsync(
+            connection, transaction, customerName, customerPhone, cancellationToken);
+
+        long orderId;
+        DateTimeOffset createdAt;
+        await using (var orderCommand = connection.CreateCommand())
+        {
+            orderCommand.Transaction = transaction;
+            orderCommand.CommandText = """
+                INSERT INTO pedidos
+                    (id_cliente, id_turno, estado, subtotal, descuento, tipo_entrega,
+                     canal_origen, costo_envio, id_operacion_cliente, observaciones)
+                VALUES
+                    (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, @delivery_type,
+                     'web', 0, @client_order_id, 'Pedido creado desde la aplicación Android')
+                RETURNING id_pedido, creado_en;
+                """;
+            orderCommand.Parameters.AddWithValue("customer_id", customerId);
+            orderCommand.Parameters.AddWithValue("shift_id", shiftId);
+            orderCommand.Parameters.AddWithValue("subtotal", subtotal);
+            orderCommand.Parameters.AddWithValue("delivery_type", deliveryType);
+            orderCommand.Parameters.AddWithValue("client_order_id", command.ClientOrderId);
+            await using var reader = await orderCommand.ExecuteReaderAsync(cancellationToken);
+            await reader.ReadAsync(cancellationToken);
+            orderId = reader.GetInt64(0);
+            createdAt = reader.GetFieldValue<DateTimeOffset>(1);
+        }
+
+        if (delivery is not null)
+        {
+            await using var deliveryCommand = connection.CreateCommand();
+            deliveryCommand.Transaction = transaction;
+            deliveryCommand.CommandText = """
+                INSERT INTO entregas_pedido
+                    (id_pedido, nombre_receptor, telefono_receptor, calle, numero, comuna, referencia)
+                VALUES
+                    (@order_id, @name, @phone, @street, @number, @county, @reference);
+                """;
+            deliveryCommand.Parameters.AddWithValue("order_id", orderId);
+            deliveryCommand.Parameters.AddWithValue("name", customerName);
+            deliveryCommand.Parameters.AddWithValue("phone", customerPhone);
+            deliveryCommand.Parameters.AddWithValue("street", delivery.Street.Trim());
+            deliveryCommand.Parameters.AddWithValue("number", delivery.Number.Trim());
+            deliveryCommand.Parameters.AddWithValue("county", delivery.County.Trim());
+            deliveryCommand.Parameters.Add("reference", NpgsqlDbType.Text).Value =
+                string.IsNullOrWhiteSpace(delivery.Reference) ? DBNull.Value : delivery.Reference.Trim();
+            await deliveryCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        foreach (var item in validatedItems)
+        {
+            long detailId;
+            await using (var detailCommand = connection.CreateCommand())
+            {
+                detailCommand.Transaction = transaction;
+                detailCommand.CommandText = """
+                    INSERT INTO detalle_pedidos
+                        (id_pedido, id_producto, nombre_producto, cantidad, precio_unitario, observaciones)
+                    VALUES (@order_id, @product_id, @name, @quantity, @unit_price, @details)
+                    RETURNING id_detalle;
+                    """;
+                detailCommand.Parameters.AddWithValue("order_id", orderId);
+                detailCommand.Parameters.AddWithValue("product_id", item.ProductId);
+                detailCommand.Parameters.AddWithValue("name", item.Name);
+                detailCommand.Parameters.AddWithValue("quantity", item.Quantity);
+                detailCommand.Parameters.AddWithValue("unit_price", item.UnitPrice);
+                detailCommand.Parameters.Add("details", NpgsqlDbType.Text).Value = (object?)item.Details ?? DBNull.Value;
+                detailId = Convert.ToInt64(await detailCommand.ExecuteScalarAsync(cancellationToken));
+            }
+
+            if (!item.RequiresConfiguration) continue;
+            await using var configurationCommand = connection.CreateCommand();
+            configurationCommand.Transaction = transaction;
+            configurationCommand.CommandText = """
+                INSERT INTO configuracion_roll_pedido
+                    (id_detalle, id_opcion_roll, id_producto_envoltura, id_salsa, configuracion_snapshot)
+                VALUES (@detail_id, @option_id, @wrapper_id, @sauce_id, @snapshot);
+                """;
+            configurationCommand.Parameters.AddWithValue("detail_id", detailId);
+            configurationCommand.Parameters.AddWithValue("option_id", item.OptionId!.Value);
+            configurationCommand.Parameters.AddWithValue("wrapper_id", item.ProductWrapperId!.Value);
+            configurationCommand.Parameters.AddWithValue("sauce_id", item.SauceId!.Value);
+            configurationCommand.Parameters.AddWithValue("snapshot", NpgsqlDbType.Jsonb, JsonSerializer.Serialize(new
+            {
+                opcion = item.OptionNumber,
+                ingredientes = item.Ingredients,
+                envoltura = item.WrapperName,
+                salsa = item.SauceName
+            }));
+            await configurationCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using (var paymentCommand = connection.CreateCommand())
+        {
+            paymentCommand.Transaction = transaction;
+            paymentCommand.CommandText = """
+                INSERT INTO pagos (id_pedido, monto, metodo, estado, proveedor, moneda)
+                VALUES (@order_id, @amount, @method, 'pendiente', 'manual', 'CLP');
+                """;
+            paymentCommand.Parameters.AddWithValue("order_id", orderId);
+            paymentCommand.Parameters.AddWithValue("amount", subtotal);
+            paymentCommand.Parameters.AddWithValue("method", paymentMethod);
+            await paymentCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return new CreatedOrder(orderId, subtotal, 0, 0, createdAt);
+    }
+
     public async Task<CustomerLoyalty?> GetCustomerLoyaltyByPhoneAsync(string phone, CancellationToken cancellationToken)
     {
         var digits = new string(phone.Where(char.IsDigit).ToArray());
@@ -1052,7 +1227,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
     }
 
     private static async Task SetAuditContextAsync(
-        NpgsqlConnection connection, NpgsqlTransaction transaction, long userId,
+        NpgsqlConnection connection, NpgsqlTransaction transaction, long? userId,
         string source, string? reason, CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
@@ -1062,7 +1237,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                    set_config('kameron.origen',@source,true),
                    set_config('kameron.motivo',@reason,true);
             """;
-        command.Parameters.AddWithValue("user_id", userId.ToString());
+        command.Parameters.AddWithValue("user_id", userId?.ToString() ?? string.Empty);
         command.Parameters.AddWithValue("source", source);
         command.Parameters.AddWithValue("reason", reason ?? string.Empty);
         await command.ExecuteNonQueryAsync(cancellationToken);
@@ -1301,6 +1476,49 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         command.CommandText = "SELECT EXISTS (SELECT 1 FROM clientes WHERE id_cliente = @id);";
         command.Parameters.AddWithValue("id", customerId);
         return Convert.ToBoolean(await command.ExecuteScalarAsync(cancellationToken));
+    }
+
+    private static string RequiredCustomerText(string? value, string field, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            throw new ArgumentException($"El campo {field} es obligatorio.");
+        var normalized = value.Trim();
+        if (normalized.Length > maxLength)
+            throw new ArgumentException($"El campo {field} no puede superar {maxLength} caracteres.");
+        return normalized;
+    }
+
+    private static async Task<long> GetOrCreateCustomerAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string name,
+        string phone,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            WITH existing AS (
+                SELECT id_cliente
+                  FROM clientes
+                 WHERE telefono = @phone
+                 ORDER BY creado_en
+                 LIMIT 1
+            ), inserted AS (
+                INSERT INTO clientes (nombre, telefono)
+                SELECT @name, @phone
+                 WHERE NOT EXISTS (SELECT 1 FROM existing)
+                RETURNING id_cliente
+            )
+            SELECT id_cliente FROM existing
+            UNION ALL
+            SELECT id_cliente FROM inserted
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("name", name);
+        command.Parameters.AddWithValue("phone", phone);
+        return Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken)
+            ?? throw new InvalidOperationException("No se pudo registrar el cliente."));
     }
 
     private static async Task<LoyaltyAccount?> LockLoyaltyAccountAsync(

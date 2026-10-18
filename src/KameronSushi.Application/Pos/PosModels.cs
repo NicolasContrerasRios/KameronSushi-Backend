@@ -66,6 +66,24 @@ public sealed record CreateLocalOrderItem(
 
 public sealed record CreateLocalPayment(string Method, decimal Amount);
 
+public sealed record CreateCustomerOrder(
+    Guid ClientOrderId,
+    string DeliveryType,
+    string PaymentMethod,
+    CustomerOrderContact Customer,
+    CustomerDeliveryAddress? Delivery,
+    IReadOnlyList<CreateLocalOrderItem> Items);
+
+public sealed record CustomerOrderContact(string Name, string Phone);
+
+public sealed record CustomerDeliveryAddress(
+    string Street,
+    string Number,
+    string County,
+    string? Reference = null);
+
+public sealed record CustomerOrderingAvailability(bool IsOpen);
+
 public sealed record CreateRewardItem(long RewardProductId, int Quantity = 1);
 
 public sealed record CreatedOrder(
