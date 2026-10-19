@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using System.Reflection;
 
 namespace KameronSushi.Infrastructure;
 
@@ -11,6 +12,7 @@ public static class DatabaseMigrations
     {
         var dataSource = services.GetRequiredService<NpgsqlDataSource>();
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await EnsureInitialSchemaAsync(connection, cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
         await using (var setupCommand = connection.CreateCommand())
@@ -396,6 +398,37 @@ public static class DatabaseMigrations
         }
 
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    private static async Task EnsureInitialSchemaAsync(
+        NpgsqlConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var lockCommand = connection.CreateCommand();
+        lockCommand.CommandText = "SELECT pg_advisory_lock(hashtext('kameron_sushi_initial_schema'));";
+        await lockCommand.ExecuteNonQueryAsync(cancellationToken);
+        try
+        {
+            await using var existsCommand = connection.CreateCommand();
+            existsCommand.CommandText = "SELECT to_regclass('public.schema_migrations') IS NOT NULL;";
+            if (Convert.ToBoolean(await existsCommand.ExecuteScalarAsync(cancellationToken))) return;
+
+            const string resourceName = "KameronSushi.Infrastructure.Database.KameronSushi.sql";
+            await using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream(resourceName)
+                ?? throw new InvalidOperationException($"No se encontró el recurso {resourceName}.");
+            using var reader = new StreamReader(stream);
+            var sql = await reader.ReadToEndAsync(cancellationToken);
+            await using var schemaCommand = connection.CreateCommand();
+            schemaCommand.CommandText = sql;
+            schemaCommand.CommandTimeout = 180;
+            await schemaCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+        finally
+        {
+            await using var unlockCommand = connection.CreateCommand();
+            unlockCommand.CommandText = "SELECT pg_advisory_unlock(hashtext('kameron_sushi_initial_schema'));";
+            await unlockCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
     }
 
     private static async Task<bool> IsAppliedAsync(

@@ -22,17 +22,10 @@ public static class DependencyInjection
         services.AddSingleton(provider =>
         {
             var options = provider.GetRequiredService<IOptions<DatabaseOptions>>().Value;
-            var builder = new NpgsqlConnectionStringBuilder
-            {
-                Host = options.Host,
-                Port = options.Port,
-                Database = options.Name,
-                Username = options.Username,
-                Password = options.Password,
-                SslMode = Enum.TryParse<SslMode>(options.SslMode, true, out var sslMode) ? sslMode : SslMode.Require,
-                GssEncryptionMode = GssEncryptionMode.Disable,
-                ApplicationName = "KameronSushi.Api"
-            };
+            var databaseUrl = configuration["DATABASE_URL"] ?? options.Url;
+            var builder = string.IsNullOrWhiteSpace(databaseUrl)
+                ? BuildFromOptions(options)
+                : BuildFromUrl(databaseUrl);
             return NpgsqlDataSource.Create(builder.ConnectionString);
         });
 
@@ -55,5 +48,48 @@ public static class DependencyInjection
                 : provider.GetRequiredService<MetaWhatsAppMessageSender>();
         });
         return services;
+    }
+
+    private static NpgsqlConnectionStringBuilder BuildFromOptions(DatabaseOptions options) => new()
+    {
+        Host = options.Host,
+        Port = options.Port,
+        Database = options.Name,
+        Username = options.Username,
+        Password = options.Password,
+        SslMode = Enum.TryParse<SslMode>(options.SslMode, true, out var sslMode) ? sslMode : SslMode.Require,
+        GssEncryptionMode = GssEncryptionMode.Disable,
+        ApplicationName = "KameronSushi.Api"
+    };
+
+    private static NpgsqlConnectionStringBuilder BuildFromUrl(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || (uri.Scheme != "postgresql" && uri.Scheme != "postgres"))
+        {
+            throw new InvalidOperationException("DATABASE_URL debe ser una URL postgresql válida.");
+        }
+
+        var credentials = uri.UserInfo.Split(':', 2);
+        if (credentials.Length != 2 || string.IsNullOrWhiteSpace(credentials[0]))
+        {
+            throw new InvalidOperationException("DATABASE_URL debe incluir usuario y contraseña.");
+        }
+
+        var database = Uri.UnescapeDataString(uri.AbsolutePath.Trim('/'));
+        if (string.IsNullOrWhiteSpace(database))
+            throw new InvalidOperationException("DATABASE_URL debe incluir el nombre de la base de datos.");
+
+        return new NpgsqlConnectionStringBuilder
+        {
+            Host = uri.Host,
+            Port = uri.IsDefaultPort ? 5432 : uri.Port,
+            Database = database,
+            Username = Uri.UnescapeDataString(credentials[0]),
+            Password = Uri.UnescapeDataString(credentials[1]),
+            SslMode = SslMode.Require,
+            GssEncryptionMode = GssEncryptionMode.Disable,
+            ApplicationName = "KameronSushi.Api"
+        };
     }
 }

@@ -78,6 +78,14 @@ Twilio__WhatsAppNumber
 Auth__BootstrapKey
 ```
 
+Como alternativa recomendada en Render, configura una sola variable secreta con la URL interna completa de PostgreSQL:
+
+```text
+DATABASE_URL=postgresql://USUARIO:CONTRASEÑA@HOST_INTERNO:5432/NOMBRE_BASE
+```
+
+`DATABASE_URL` tiene prioridad sobre las variables `Database__*`. Debe guardarse únicamente en **Environment** y nunca en archivos o commits. Cuando la base está vacía, el backend crea automáticamente el esquema consolidado y carga el catálogo inicial antes de empezar a escuchar solicitudes.
+
 `Auth__BootstrapKey` se utiliza únicamente para crear el primer administrador desde la pantalla inicial de la aplicación. Después de crearlo, el endpoint de configuración queda deshabilitado por la existencia del administrador y la variable puede eliminarse de Render. Las sesiones duran 12 horas por defecto; puede cambiarse con `Auth__SessionHours`.
 
 Los PIN de cuatro dígitos se almacenan con PBKDF2-HMAC-SHA256, una sal aleatoria por usuario y 600.000 iteraciones. Nunca se guarda el PIN original. PostgreSQL conserva únicamente el hash SHA-256 de cada token de sesión. Bloquear, deshabilitar o cambiar el PIN de un usuario revoca sus sesiones. El endpoint de acceso limita los intentos para reducir ataques por fuerza bruta.
