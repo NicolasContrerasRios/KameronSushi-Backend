@@ -144,16 +144,21 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
 
     public async Task<CreatedOrder> CreateCustomerOrderAsync(
         CreateCustomerOrder command,
+        long? authenticatedCustomerId,
         CancellationToken cancellationToken)
     {
         if (command.ClientOrderId == Guid.Empty)
             throw new ArgumentException("El identificador de la operación es obligatorio.");
 
         var items = command.Items ?? [];
-        if (items.Count == 0) throw new ArgumentException("El pedido debe contener al menos un producto.");
+        var rewardItems = (command.Rewards ?? []).GroupBy(x => x.RewardProductId)
+            .Select(x => new CreateRewardItem(x.Key, x.Sum(y => y.Quantity))).ToList();
+        if (items.Count == 0 && rewardItems.Count == 0) throw new ArgumentException("El pedido debe contener al menos un producto o canje.");
         if (items.Count > 100) throw new ArgumentException("El pedido no puede contener más de 100 líneas.");
         if (items.Any(item => item.Quantity is <= 0 or > 100))
             throw new ArgumentException("Cada cantidad debe estar entre 1 y 100.");
+        if (rewardItems.Any(item => item.Quantity is <= 0 or > 20)) throw new ArgumentException("Cada canje debe tener entre 1 y 20 unidades.");
+        if (rewardItems.Count > 0 && authenticatedCustomerId is null) throw new ArgumentException("Inicia sesión para canjear puntos.");
 
         var deliveryType = command.DeliveryType?.Trim().ToLowerInvariant() switch
         {
@@ -206,10 +211,20 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             validatedItems.Add(await ValidateItemAsync(connection, transaction, item, false, cancellationToken));
         }
         var subtotal = validatedItems.Sum(item => item.UnitPrice * item.Quantity);
-        if (subtotal <= 0) throw new ArgumentException("El total del pedido debe ser mayor que cero.");
+        if (subtotal < 0) throw new ArgumentException("El total del pedido no es válido.");
 
-        var customerId = await GetOrCreateCustomerAsync(
+        var customerId = authenticatedCustomerId ?? await GetOrCreateCustomerAsync(
             connection, transaction, customerName, customerPhone, cancellationToken);
+        LoyaltyAccount? loyaltyAccount = null;
+        var validatedRewards = new List<ValidatedReward>();
+        if (rewardItems.Count > 0)
+        {
+            loyaltyAccount = await LockLoyaltyAccountAsync(connection, transaction, customerId, cancellationToken)
+                ?? throw new ArgumentException("La cuenta de puntos no está activa.");
+            foreach (var reward in rewardItems) validatedRewards.Add(await ValidateRewardAsync(connection, transaction, reward, cancellationToken));
+            if (validatedRewards.Sum(x => x.PointsCost * x.Quantity) > loyaltyAccount.Points)
+                throw new ArgumentException("No tienes puntos suficientes para este canje.");
+        }
 
         long orderId;
         DateTimeOffset createdAt;
@@ -300,7 +315,23 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             await configurationCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await using (var paymentCommand = connection.CreateCommand())
+        foreach (var reward in validatedRewards)
+        {
+            await using var rewardCommand = connection.CreateCommand();
+            rewardCommand.Transaction = transaction;
+            rewardCommand.CommandText = """
+                INSERT INTO detalle_pedidos(id_pedido,id_producto,nombre_producto,cantidad,precio_unitario,puntos_unitarios,tipo_item,observaciones)
+                VALUES(@order,@product,@name,@quantity,0,@points,'canje','Producto canjeado desde la aplicación');
+                UPDATE productos_canje SET stock_disponible=CASE WHEN stock_disponible IS NULL THEN NULL ELSE stock_disponible-@quantity END,
+                    actualizado_en=NOW() WHERE id_producto_canje=@reward;
+                """;
+            rewardCommand.Parameters.AddWithValue("order",orderId); rewardCommand.Parameters.AddWithValue("product",reward.ProductId);
+            rewardCommand.Parameters.AddWithValue("name",reward.Name); rewardCommand.Parameters.AddWithValue("quantity",reward.Quantity);
+            rewardCommand.Parameters.AddWithValue("points",reward.PointsCost); rewardCommand.Parameters.AddWithValue("reward",reward.RewardProductId);
+            await rewardCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        if (subtotal > 0) await using (var paymentCommand = connection.CreateCommand())
         {
             paymentCommand.Transaction = transaction;
             paymentCommand.CommandText = """
@@ -313,8 +344,24 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             await paymentCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        int? remainingPoints = null;
+        if (loyaltyAccount is not null)
+        {
+            var redeemed = validatedRewards.Sum(x => x.PointsCost * x.Quantity);
+            remainingPoints = loyaltyAccount.Points - redeemed;
+            await using var pointsCommand = connection.CreateCommand(); pointsCommand.Transaction = transaction;
+            pointsCommand.CommandText = """
+                UPDATE cuentas_fidelizacion SET saldo_puntos=@balance,puntos_canjeados=puntos_canjeados+@redeemed,actualizado_en=NOW() WHERE id_cuenta=@account;
+                INSERT INTO movimiento_puntos(id_cuenta,id_pedido,tipo,puntos,saldo_anterior,saldo_resultante,descripcion)
+                VALUES(@account,@order,'canje',-@redeemed,@previous,@balance,'Canje realizado desde la aplicación');
+                """;
+            pointsCommand.Parameters.AddWithValue("balance",remainingPoints.Value); pointsCommand.Parameters.AddWithValue("redeemed",redeemed);
+            pointsCommand.Parameters.AddWithValue("account",loyaltyAccount.AccountId); pointsCommand.Parameters.AddWithValue("order",orderId);
+            pointsCommand.Parameters.AddWithValue("previous",loyaltyAccount.Points); await pointsCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
-        return new CreatedOrder(orderId, subtotal, 0, 0, createdAt);
+        return new CreatedOrder(orderId, subtotal, 0, 0, createdAt, remainingPoints);
     }
 
     public async Task<CustomerLoyalty?> GetCustomerLoyaltyByPhoneAsync(string phone, CancellationToken cancellationToken)
@@ -1221,6 +1268,45 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             update.Parameters.AddWithValue("status", newStatus);
             update.Parameters.AddWithValue("id", orderId);
             await update.ExecuteNonQueryAsync(cancellationToken);
+        }
+        if (newStatus == "listo")
+        {
+            await using var points = connection.CreateCommand();
+            points.Transaction = transaction;
+            points.CommandText = """
+                WITH pedido AS (
+                    SELECT p.id_pedido,p.id_cliente,p.total,r.id_regla,r.monto_por_punto,r.dias_vigencia
+                      FROM pedidos p
+                      JOIN LATERAL (
+                          SELECT id_regla,monto_por_punto,dias_vigencia FROM reglas_fidelizacion
+                           WHERE activa AND vigente_desde<=NOW() AND (vigente_hasta IS NULL OR vigente_hasta>NOW())
+                           ORDER BY vigente_desde DESC,id_regla DESC LIMIT 1
+                      ) r ON TRUE
+                     WHERE p.id_pedido=@id AND p.id_cliente IS NOT NULL AND p.total>=r.monto_por_punto
+                       AND NOT EXISTS(SELECT 1 FROM movimiento_puntos m WHERE m.id_pedido=p.id_pedido AND m.tipo='acumulacion')
+                ), cuenta AS (
+                    INSERT INTO cuentas_fidelizacion(id_cliente)
+                    SELECT id_cliente FROM pedido ON CONFLICT(id_cliente) DO NOTHING
+                ), bloqueada AS (
+                    SELECT cf.id_cuenta,cf.saldo_puntos,p.id_pedido,p.id_regla,p.dias_vigencia,
+                           FLOOR(p.total/p.monto_por_punto)::int AS ganados
+                      FROM pedido p JOIN cuentas_fidelizacion cf ON cf.id_cliente=p.id_cliente
+                     WHERE cf.estado='activa' FOR UPDATE OF cf
+                ), actualizada AS (
+                    UPDATE cuentas_fidelizacion cf
+                       SET saldo_puntos=cf.saldo_puntos+b.ganados,
+                           puntos_acumulados=cf.puntos_acumulados+b.ganados,actualizado_en=NOW()
+                      FROM bloqueada b WHERE cf.id_cuenta=b.id_cuenta
+                    RETURNING cf.id_cuenta,b.id_pedido,b.id_regla,b.dias_vigencia,b.ganados,
+                              b.saldo_puntos AS anterior,cf.saldo_puntos AS resultante
+                )
+                INSERT INTO movimiento_puntos(id_cuenta,id_pedido,id_regla,tipo,puntos,saldo_anterior,saldo_resultante,descripcion,vence_en)
+                SELECT id_cuenta,id_pedido,id_regla,'acumulacion',ganados,anterior,resultante,
+                       'Puntos por pedido completado',CASE WHEN dias_vigencia IS NULL THEN NULL ELSE NOW()+make_interval(days=>dias_vigencia) END
+                  FROM actualizada;
+                """;
+            points.Parameters.AddWithValue("id", orderId);
+            await points.ExecuteNonQueryAsync(cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);
         return true;

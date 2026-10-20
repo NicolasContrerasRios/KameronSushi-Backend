@@ -72,7 +72,8 @@ public sealed record CreateCustomerOrder(
     string PaymentMethod,
     CustomerOrderContact Customer,
     CustomerDeliveryAddress? Delivery,
-    IReadOnlyList<CreateLocalOrderItem> Items);
+    IReadOnlyList<CreateLocalOrderItem> Items,
+    IReadOnlyList<CreateRewardItem>? Rewards = null);
 
 public sealed record CustomerOrderContact(string Name, string Phone);
 

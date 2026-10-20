@@ -5,7 +5,7 @@ namespace KameronSushi.Application.Abstractions;
 public interface IPosStore
 {
     Task<IReadOnlyList<CatalogProduct>> GetCatalogAsync(CancellationToken cancellationToken);
-    Task<CreatedOrder> CreateCustomerOrderAsync(CreateCustomerOrder command, CancellationToken cancellationToken);
+    Task<CreatedOrder> CreateCustomerOrderAsync(CreateCustomerOrder command, long? authenticatedCustomerId, CancellationToken cancellationToken);
     Task<CustomerLoyalty?> GetCustomerLoyaltyByPhoneAsync(string phone, CancellationToken cancellationToken);
     Task<CreatedOrder> CreateLocalOrderAsync(CreateLocalOrder command, long userId, CancellationToken cancellationToken);
     Task<IReadOnlyList<PosOrderSummary>> GetOrdersAsync(string? status, int limit, CancellationToken cancellationToken);

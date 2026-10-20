@@ -9,7 +9,7 @@ namespace KameronSushi.Api.Controllers;
 [ApiController]
 [AllowAnonymous]
 [Route("api/customer")]
-public sealed class CustomerOrderingController(IPosStore store) : ControllerBase
+public sealed class CustomerOrderingController(IPosStore store, ICustomerAppStore customerStore) : ControllerBase
 {
     [HttpGet("catalog")]
     public async Task<ActionResult<IReadOnlyList<CatalogProduct>>> GetCatalog(CancellationToken cancellationToken) =>
@@ -27,7 +27,10 @@ public sealed class CustomerOrderingController(IPosStore store) : ControllerBase
     {
         try
         {
-            var created = await store.CreateCustomerOrderAsync(request, cancellationToken);
+            var authorization = Request.Headers.Authorization.ToString();
+            var token = authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? authorization[7..].Trim() : null;
+            var customer = token is null ? null : await customerStore.GetSessionCustomerAsync(token, cancellationToken);
+            var created = await store.CreateCustomerOrderAsync(request, customer?.CustomerId, cancellationToken);
             return Created($"/api/customer/orders/{created.OrderId}", created);
         }
         catch (ArgumentException exception) when (exception.Message.StartsWith("LOCAL_CLOSED:", StringComparison.Ordinal))
