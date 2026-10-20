@@ -1278,11 +1278,12 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                     SELECT p.id_pedido,p.id_cliente,p.total,r.id_regla,r.monto_por_punto,r.dias_vigencia
                       FROM pedidos p
                       JOIN LATERAL (
-                          SELECT id_regla,monto_por_punto,dias_vigencia FROM reglas_fidelizacion
+                          SELECT id_regla,monto_por_punto,compra_minima,dias_vigencia FROM reglas_fidelizacion
                            WHERE activa AND vigente_desde<=NOW() AND (vigente_hasta IS NULL OR vigente_hasta>NOW())
                            ORDER BY vigente_desde DESC,id_regla DESC LIMIT 1
                       ) r ON TRUE
-                     WHERE p.id_pedido=@id AND p.id_cliente IS NOT NULL AND p.total>=r.monto_por_punto
+                     WHERE p.id_pedido=@id AND p.id_cliente IS NOT NULL
+                       AND p.total>=GREATEST(r.monto_por_punto,r.compra_minima)
                        AND NOT EXISTS(SELECT 1 FROM movimiento_puntos m WHERE m.id_pedido=p.id_pedido AND m.tipo='acumulacion')
                 ), cuenta AS (
                     INSERT INTO cuentas_fidelizacion(id_cliente)
