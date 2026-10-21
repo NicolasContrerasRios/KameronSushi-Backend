@@ -78,7 +78,7 @@ public sealed class PostgresCustomerAppStore(
         var phone = NormalizePhone(request.Phone);
         await using var command = dataSource.CreateCommand("""
             SELECT a.id_cliente,a.pin_hash FROM cuentas_cliente_app a
-             WHERE a.telefono_normalizado=@phone AND a.estado='activa';
+             WHERE a.telefono_normalizado=@phone AND a.estado='activa' AND a.pin_hash IS NOT NULL;
             """);
         command.Parameters.AddWithValue("phone", phone);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -87,6 +87,69 @@ public sealed class PostgresCustomerAppStore(
         var hash = reader.GetString(1);
         if (!passwordHasher.Verify(request.Pin, hash)) return null;
         return await CreateSessionAsync(customerId, request.DeviceName, cancellationToken);
+    }
+
+    public async Task<CustomerSession> LoginWithGoogleAsync(
+        VerifiedGoogleIdentity identity, string? deviceName, CancellationToken cancellationToken)
+    {
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+        await using (var advisory = connection.CreateCommand())
+        {
+            advisory.Transaction = transaction;
+            advisory.CommandText = "SELECT pg_advisory_xact_lock(hashtextextended(@subject,0));";
+            advisory.Parameters.AddWithValue("subject", identity.Subject);
+            await advisory.ExecuteNonQueryAsync(cancellationToken);
+        }
+        long customerId;
+        await using (var lookup = connection.CreateCommand())
+        {
+            lookup.Transaction = transaction;
+            lookup.CommandText = "SELECT id_cliente FROM cuentas_cliente_app WHERE google_subject=@subject;";
+            lookup.Parameters.AddWithValue("subject", identity.Subject);
+            var existing = await lookup.ExecuteScalarAsync(cancellationToken);
+            if (existing is not null)
+            {
+                customerId = Convert.ToInt64(existing);
+                await transaction.CommitAsync(cancellationToken);
+                return await CreateSessionAsync(customerId, deviceName, cancellationToken);
+            }
+        }
+
+        await using (var customer = connection.CreateCommand())
+        {
+            customer.Transaction = transaction;
+            customer.CommandText = """
+                WITH existing AS (
+                    SELECT id_cliente FROM clientes WHERE LOWER(email)=@email ORDER BY creado_en LIMIT 1
+                ), inserted AS (
+                    INSERT INTO clientes(nombre,telefono,email)
+                    SELECT @name,@synthetic_phone,@email WHERE NOT EXISTS(SELECT 1 FROM existing)
+                    RETURNING id_cliente
+                )
+                SELECT id_cliente FROM existing UNION ALL SELECT id_cliente FROM inserted LIMIT 1;
+                """;
+            customer.Parameters.AddWithValue("name", Required(identity.Name,"nombre",150));
+            customer.Parameters.AddWithValue("email", identity.Email);
+            customer.Parameters.AddWithValue("synthetic_phone", GooglePhone(identity.Subject));
+            customerId = Convert.ToInt64(await customer.ExecuteScalarAsync(cancellationToken));
+        }
+        await using (var account = connection.CreateCommand())
+        {
+            account.Transaction = transaction;
+            account.CommandText = """
+                INSERT INTO cuentas_cliente_app(id_cliente,telefono_normalizado,pin_hash,google_subject)
+                VALUES(@customer,@phone,NULL,@subject)
+                ON CONFLICT(id_cliente) DO UPDATE SET google_subject=EXCLUDED.google_subject,actualizado_en=NOW();
+                INSERT INTO cuentas_fidelizacion(id_cliente) VALUES(@customer) ON CONFLICT(id_cliente) DO NOTHING;
+                """;
+            account.Parameters.AddWithValue("customer",customerId);
+            account.Parameters.AddWithValue("phone",GooglePhone(identity.Subject));
+            account.Parameters.AddWithValue("subject",identity.Subject);
+            await account.ExecuteNonQueryAsync(cancellationToken);
+        }
+        await transaction.CommitAsync(cancellationToken);
+        return await CreateSessionAsync(customerId, deviceName, cancellationToken);
     }
 
     public async Task<CustomerProfile?> GetSessionCustomerAsync(string token, CancellationToken cancellationToken)
@@ -196,8 +259,14 @@ public sealed class PostgresCustomerAppStore(
         command.Parameters.AddWithValue("id",id); await using var reader=await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken)?ReadProfile(reader):null;
     }
-    private static CustomerProfile ReadProfile(NpgsqlDataReader r)=>new(r.GetInt64(0),r.GetString(1),r.GetString(2),r.IsDBNull(3)?null:r.GetString(3),r.GetInt32(4));
+    private static CustomerProfile ReadProfile(NpgsqlDataReader r)
+    {
+        var phone=r.GetString(2);
+        if(phone.Length==19 && phone[0]=='g') phone=string.Empty;
+        return new(r.GetInt64(0),r.GetString(1),phone,r.IsDBNull(3)?null:r.GetString(3),r.GetInt32(4));
+    }
     private static string NormalizePhone(string value){var digits=new string((value??"").Where(char.IsDigit).ToArray());if(digits.Length<8||digits.Length>15)throw new ArgumentException("Ingresa un teléfono válido.");return digits.Length==9?"56"+digits:digits;}
     private static string Required(string? value,string field,int max){if(string.IsNullOrWhiteSpace(value))throw new ArgumentException($"El campo {field} es obligatorio.");var v=value.Trim();if(v.Length>max)throw new ArgumentException($"El campo {field} no puede superar {max} caracteres.");return v;}
     private static string HashToken(string token)=>Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
+    private static string GooglePhone(string subject)=>"g"+Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(subject))).ToLowerInvariant()[..18];
 }

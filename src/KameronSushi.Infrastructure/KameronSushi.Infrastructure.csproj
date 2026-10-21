@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="Google.Apis.Auth" Version="1.77.0" />
     <ProjectReference Include="..\KameronSushi.Application\KameronSushi.Application.csproj" />
   </ItemGroup>
 

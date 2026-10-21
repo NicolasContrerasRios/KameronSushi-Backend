@@ -6,6 +6,7 @@ public interface ICustomerAppStore
 {
     Task<CustomerSession> RegisterAsync(RegisterCustomer request, CancellationToken cancellationToken);
     Task<CustomerSession?> LoginAsync(LoginCustomer request, CancellationToken cancellationToken);
+    Task<CustomerSession> LoginWithGoogleAsync(VerifiedGoogleIdentity identity, string? deviceName, CancellationToken cancellationToken);
     Task<CustomerProfile?> GetSessionCustomerAsync(string token, CancellationToken cancellationToken);
     Task RevokeSessionAsync(string token, CancellationToken cancellationToken);
     Task<CustomerHome> GetHomeAsync(long? customerId, CancellationToken cancellationToken);

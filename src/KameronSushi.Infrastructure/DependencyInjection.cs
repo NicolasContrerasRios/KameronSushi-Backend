@@ -18,6 +18,7 @@ public static class DependencyInjection
         services.Configure<WhatsAppOptions>(configuration.GetSection(WhatsAppOptions.SectionName));
         services.Configure<TwilioOptions>(configuration.GetSection(TwilioOptions.SectionName));
         services.Configure<AuthOptions>(configuration.GetSection(AuthOptions.SectionName));
+        services.Configure<GoogleAuthOptions>(configuration.GetSection(GoogleAuthOptions.SectionName));
 
         services.AddSingleton(provider =>
         {
@@ -36,6 +37,7 @@ public static class DependencyInjection
         services.AddScoped<IAuthStore, PostgresAuthStore>();
         services.AddScoped<ICustomerAppStore, PostgresCustomerAppStore>();
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
+        services.AddSingleton<IGoogleTokenValidator, GoogleTokenValidator>();
         services.AddSingleton<IWebhookSignatureValidator, MetaWebhookSignatureValidator>();
         services.AddSingleton<TwilioWebhookSignatureValidator>();
         services.AddScoped<TwilioTwiMlMessageSender>();

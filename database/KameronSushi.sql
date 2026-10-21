@@ -168,11 +168,15 @@ CREATE TABLE cuentas_cliente_app (
     id_cuenta_app BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id_cliente BIGINT NOT NULL UNIQUE REFERENCES clientes(id_cliente) ON DELETE CASCADE,
     telefono_normalizado VARCHAR(20) NOT NULL UNIQUE,
-    pin_hash VARCHAR(255) NOT NULL,
+    pin_hash VARCHAR(255),
+    google_subject VARCHAR(100),
     estado VARCHAR(20) NOT NULL DEFAULT 'activa' CHECK(estado IN ('activa','bloqueada','cerrada')),
     creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_cuenta_cliente_autenticacion CHECK(pin_hash IS NOT NULL OR google_subject IS NOT NULL)
 );
+CREATE UNIQUE INDEX ux_cuentas_cliente_app_google
+    ON cuentas_cliente_app(google_subject) WHERE google_subject IS NOT NULL;
 
 CREATE TABLE sesiones_cliente_app (
     id_sesion BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
