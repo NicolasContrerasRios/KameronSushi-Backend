@@ -90,8 +90,9 @@ public sealed class PostgresCustomerAppStore(
     }
 
     public async Task<CustomerSession> LoginWithGoogleAsync(
-        VerifiedGoogleIdentity identity, string? deviceName, CancellationToken cancellationToken)
+        VerifiedGoogleIdentity identity, string phoneValue, string? deviceName, CancellationToken cancellationToken)
     {
+        var phone = NormalizePhone(phoneValue);
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
         await using (var advisory = connection.CreateCommand())
@@ -101,55 +102,137 @@ public sealed class PostgresCustomerAppStore(
             advisory.Parameters.AddWithValue("subject", identity.Subject);
             await advisory.ExecuteNonQueryAsync(cancellationToken);
         }
+        await using (var advisory = connection.CreateCommand())
+        {
+            advisory.Transaction = transaction;
+            advisory.CommandText = "SELECT pg_advisory_xact_lock(hashtextextended(@phone,0));";
+            advisory.Parameters.AddWithValue("phone", phone);
+            await advisory.ExecuteNonQueryAsync(cancellationToken);
+        }
         long customerId;
         await using (var lookup = connection.CreateCommand())
         {
             lookup.Transaction = transaction;
-            lookup.CommandText = "SELECT id_cliente FROM cuentas_cliente_app WHERE google_subject=@subject;";
+            lookup.CommandText = "SELECT id_cuenta_app,id_cliente FROM cuentas_cliente_app WHERE google_subject=@subject;";
             lookup.Parameters.AddWithValue("subject", identity.Subject);
-            var existing = await lookup.ExecuteScalarAsync(cancellationToken);
-            if (existing is not null)
+            await using var reader = await lookup.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
             {
-                customerId = Convert.ToInt64(existing);
+                var accountId = reader.GetInt64(0);
+                customerId = reader.GetInt64(1);
+                await reader.DisposeAsync();
+                await EnsurePhoneAvailableAsync(connection, transaction, phone, accountId, cancellationToken);
+                await UpdateGoogleAccountPhoneAsync(connection, transaction, accountId, customerId, phone, identity, cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return await CreateSessionAsync(customerId, deviceName, cancellationToken);
             }
         }
 
-        await using (var customer = connection.CreateCommand())
+        long? phoneAccountId = null;
+        await using (var phoneLookup = connection.CreateCommand())
         {
-            customer.Transaction = transaction;
-            customer.CommandText = """
-                WITH existing AS (
-                    SELECT id_cliente FROM clientes WHERE LOWER(email)=@email ORDER BY creado_en LIMIT 1
-                ), inserted AS (
-                    INSERT INTO clientes(nombre,telefono,email)
-                    SELECT @name,@synthetic_phone,@email WHERE NOT EXISTS(SELECT 1 FROM existing)
-                    RETURNING id_cliente
-                )
-                SELECT id_cliente FROM existing UNION ALL SELECT id_cliente FROM inserted LIMIT 1;
-                """;
-            customer.Parameters.AddWithValue("name", Required(identity.Name,"nombre",150));
-            customer.Parameters.AddWithValue("email", identity.Email);
-            customer.Parameters.AddWithValue("synthetic_phone", GooglePhone(identity.Subject));
-            customerId = Convert.ToInt64(await customer.ExecuteScalarAsync(cancellationToken));
+            phoneLookup.Transaction = transaction;
+            phoneLookup.CommandText = "SELECT id_cuenta_app,id_cliente,google_subject FROM cuentas_cliente_app WHERE telefono_normalizado=@phone;";
+            phoneLookup.Parameters.AddWithValue("phone", phone);
+            await using var reader = await phoneLookup.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                phoneAccountId = reader.GetInt64(0);
+                customerId = reader.GetInt64(1);
+                if (!reader.IsDBNull(2) && reader.GetString(2) != identity.Subject)
+                    throw new ArgumentException("Este teléfono ya está asociado a otra cuenta de Google.");
+            }
+            else customerId = 0;
         }
-        await using (var account = connection.CreateCommand())
+
+        if (phoneAccountId is not null)
         {
+            await UpdateGoogleAccountPhoneAsync(connection, transaction, phoneAccountId.Value, customerId, phone, identity, cancellationToken);
+        }
+        else
+        {
+            await using (var customer = connection.CreateCommand())
+            {
+                customer.Transaction = transaction;
+                customer.CommandText = """
+                    WITH existing AS (
+                        SELECT c.id_cliente
+                          FROM clientes c
+                         WHERE NOT EXISTS(SELECT 1 FROM cuentas_cliente_app a WHERE a.id_cliente=c.id_cliente)
+                           AND (RIGHT(REGEXP_REPLACE(c.telefono,'\D','','g'),9)=RIGHT(@phone,9)
+                                OR LOWER(c.email)=@email)
+                         ORDER BY (RIGHT(REGEXP_REPLACE(c.telefono,'\D','','g'),9)=RIGHT(@phone,9)) DESC,c.creado_en
+                         LIMIT 1
+                    ), inserted AS (
+                        INSERT INTO clientes(nombre,telefono,email)
+                        SELECT @name,@phone,@email WHERE NOT EXISTS(SELECT 1 FROM existing)
+                        RETURNING id_cliente
+                    )
+                    SELECT id_cliente FROM existing UNION ALL SELECT id_cliente FROM inserted LIMIT 1;
+                    """;
+                customer.Parameters.AddWithValue("name", Required(identity.Name,"nombre",150));
+                customer.Parameters.AddWithValue("phone", phone);
+                customer.Parameters.AddWithValue("email", identity.Email);
+                customerId = Convert.ToInt64(await customer.ExecuteScalarAsync(cancellationToken));
+            }
+            await using (var customerUpdate = connection.CreateCommand())
+            {
+                customerUpdate.Transaction = transaction;
+                customerUpdate.CommandText = "UPDATE clientes SET telefono=@phone,email=COALESCE(email,@email) WHERE id_cliente=@customer;";
+                customerUpdate.Parameters.AddWithValue("phone", phone);
+                customerUpdate.Parameters.AddWithValue("email", identity.Email);
+                customerUpdate.Parameters.AddWithValue("customer", customerId);
+                await customerUpdate.ExecuteNonQueryAsync(cancellationToken);
+            }
+            await using var account = connection.CreateCommand();
             account.Transaction = transaction;
             account.CommandText = """
                 INSERT INTO cuentas_cliente_app(id_cliente,telefono_normalizado,pin_hash,google_subject)
-                VALUES(@customer,@phone,NULL,@subject)
-                ON CONFLICT(id_cliente) DO UPDATE SET google_subject=EXCLUDED.google_subject,actualizado_en=NOW();
+                VALUES(@customer,@phone,NULL,@subject);
                 INSERT INTO cuentas_fidelizacion(id_cliente) VALUES(@customer) ON CONFLICT(id_cliente) DO NOTHING;
                 """;
             account.Parameters.AddWithValue("customer",customerId);
-            account.Parameters.AddWithValue("phone",GooglePhone(identity.Subject));
+            account.Parameters.AddWithValue("phone",phone);
             account.Parameters.AddWithValue("subject",identity.Subject);
             await account.ExecuteNonQueryAsync(cancellationToken);
         }
         await transaction.CommitAsync(cancellationToken);
         return await CreateSessionAsync(customerId, deviceName, cancellationToken);
+    }
+
+    private static async Task EnsurePhoneAvailableAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, string phone, long accountId, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT EXISTS(SELECT 1 FROM cuentas_cliente_app WHERE telefono_normalizado=@phone AND id_cuenta_app<>@account);";
+        command.Parameters.AddWithValue("phone", phone);
+        command.Parameters.AddWithValue("account", accountId);
+        if (Convert.ToBoolean(await command.ExecuteScalarAsync(cancellationToken)))
+            throw new ArgumentException("Este teléfono ya está asociado a otra cuenta.");
+    }
+
+    private static async Task UpdateGoogleAccountPhoneAsync(
+        NpgsqlConnection connection, NpgsqlTransaction transaction, long accountId, long customerId, string phone,
+        VerifiedGoogleIdentity identity, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = """
+            UPDATE cuentas_cliente_app
+               SET telefono_normalizado=@phone,google_subject=@subject,actualizado_en=NOW()
+             WHERE id_cuenta_app=@account;
+            UPDATE clientes
+               SET telefono=@phone,email=COALESCE(email,@email)
+             WHERE id_cliente=@customer;
+            INSERT INTO cuentas_fidelizacion(id_cliente) VALUES(@customer) ON CONFLICT(id_cliente) DO NOTHING;
+            """;
+        command.Parameters.AddWithValue("phone", phone);
+        command.Parameters.AddWithValue("subject", identity.Subject);
+        command.Parameters.AddWithValue("account", accountId);
+        command.Parameters.AddWithValue("customer", customerId);
+        command.Parameters.AddWithValue("email", identity.Email);
+        await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task<CustomerProfile?> GetSessionCustomerAsync(string token, CancellationToken cancellationToken)
@@ -268,5 +351,4 @@ public sealed class PostgresCustomerAppStore(
     private static string NormalizePhone(string value){var digits=new string((value??"").Where(char.IsDigit).ToArray());if(digits.Length<8||digits.Length>15)throw new ArgumentException("Ingresa un teléfono válido.");return digits.Length==9?"56"+digits:digits;}
     private static string Required(string? value,string field,int max){if(string.IsNullOrWhiteSpace(value))throw new ArgumentException($"El campo {field} es obligatorio.");var v=value.Trim();if(v.Length>max)throw new ArgumentException($"El campo {field} no puede superar {max} caracteres.");return v;}
     private static string HashToken(string token)=>Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
-    private static string GooglePhone(string subject)=>"g"+Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(subject))).ToLowerInvariant()[..18];
 }

@@ -2,7 +2,7 @@ namespace KameronSushi.Application.Customers;
 
 public sealed record RegisterCustomer(string Name, string Phone, string Pin, string? Email, string? DeviceName);
 public sealed record LoginCustomer(string Phone, string Pin, string? DeviceName);
-public sealed record LoginCustomerWithGoogle(string IdToken, string? DeviceName);
+public sealed record LoginCustomerWithGoogle(string IdToken, string Phone, string? DeviceName);
 public sealed record VerifiedGoogleIdentity(string Subject, string Email, string Name);
 public sealed record CustomerSession(string Token, DateTimeOffset ExpiresAt, CustomerProfile Customer);
 public sealed record CustomerProfile(long CustomerId, string Name, string Phone, string? Email, int Points);

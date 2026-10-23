@@ -22,7 +22,8 @@ public sealed class CustomerAccountController(ICustomerAppStore store, IGoogleTo
     {
         var identity=await googleTokenValidator.ValidateAsync(request.IdToken,ct);
         if(identity is null) return Problem(statusCode:401,title:"Acceso de Google inválido",detail:"Google no pudo validar esta identidad.");
-        return Ok(await store.LoginWithGoogleAsync(identity,request.DeviceName,ct));
+        try { return Ok(await store.LoginWithGoogleAsync(identity,request.Phone,request.DeviceName,ct)); }
+        catch(ArgumentException e) { return Problem(statusCode:400,title:"No se pudo asociar el teléfono",detail:e.Message); }
     }
 
     [HttpPost("auth/logout")]
