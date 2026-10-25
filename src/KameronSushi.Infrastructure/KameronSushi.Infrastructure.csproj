@@ -1,13 +1,13 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <PackageReference Include="CloudinaryDotNet" Version="1.29.3" />
     <PackageReference Include="Google.Apis.Auth" Version="1.77.0" />
     <ProjectReference Include="..\KameronSushi.Application\KameronSushi.Application.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <EmbeddedResource Include="..\..\database\KameronSushi.sql"
-                      LogicalName="KameronSushi.Infrastructure.Database.KameronSushi.sql" />
+    <EmbeddedResource Include="..\..\database\KameronSushi.sql" LogicalName="KameronSushi.Infrastructure.Database.KameronSushi.sql" />
   </ItemGroup>
 
   <ItemGroup>

@@ -274,6 +274,16 @@ WhatsApp__VerifyToken
 WhatsApp__AppSecret
 ```
 
+Para cargar fotografías de productos desde Administración agrega también:
+
+```text
+Cloudinary__CloudName
+Cloudinary__ApiKey
+Cloudinary__ApiSecret
+```
+
+El secreto de Cloudinary solo se configura en Render. La aplicación de escritorio envía imágenes JPG, PNG o WebP de hasta 5 MB al endpoint autenticado `POST /api/admin/products/{productId}/image`; el backend las transforma a 1000 x 1000, guarda la URL HTTPS en `productos.imagen_url` y el catálogo la entrega a Android. `DELETE /api/admin/products/{productId}/image` elimina el recurso y limpia la URL. La migración `016_product_images` garantiza que la columna exista.
+
 Para Twilio reemplaza las tres credenciales de Meta por `WhatsApp__Provider=Twilio`, `Twilio__AccountSid`, `Twilio__AuthToken` y `Twilio__WhatsAppNumber`.
 
 Render termina HTTPS en su proxy y reenvía el protocolo original mediante cabeceras `X-Forwarded-*`, que la API procesa antes de atender el webhook.

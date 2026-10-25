@@ -8,8 +8,9 @@ namespace KameronSushi.Api.Controllers;
 [ApiController]
 [Authorize(Roles = "administrador")]
 [Route("api/admin")]
-public sealed class AdminController(IAdminStore store) : ControllerBase
+public sealed class AdminController(IAdminStore store, IProductImageStorage productImages) : ControllerBase
 {
+    private const int MaxProductImageBytes = 5 * 1024 * 1024;
     [HttpGet("categories")]
     public async Task<ActionResult<IReadOnlyList<AdminCategory>>> GetCategories(CancellationToken cancellationToken) =>
         Ok(await store.GetCategoriesAsync(cancellationToken));
@@ -53,6 +54,53 @@ public sealed class AdminController(IAdminStore store) : ControllerBase
         catch (ArgumentException exception)
         {
             return BadRequestProblem(exception);
+        }
+    }
+
+    [HttpPost("products/{productId:long}/image")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(MaxProductImageBytes + 64 * 1024)]
+    public async Task<ActionResult<AdminProduct>> UploadProductImage(
+        long productId, IFormFile file, CancellationToken cancellationToken)
+    {
+        if (file is null || file.Length == 0)
+            return Problem(statusCode:400,title:"Imagen inválida",detail:"Selecciona una imagen.");
+        if (file.Length > MaxProductImageBytes)
+            return Problem(statusCode:400,title:"Imagen demasiado grande",detail:"La imagen no puede superar 5 MB.");
+        if (!(await store.GetProductsAsync(cancellationToken)).Any(product => product.Id == productId))
+            return NotFound();
+
+        await using var memory = new MemoryStream((int)file.Length);
+        await file.CopyToAsync(memory, cancellationToken);
+        if (!IsSupportedImage(memory.GetBuffer().AsSpan(0, (int)memory.Length)))
+            return Problem(statusCode:400,title:"Formato no permitido",detail:"Usa una imagen JPG, PNG o WebP válida.");
+        memory.Position = 0;
+        try
+        {
+            var url = await productImages.UploadAsync(productId, memory, file.FileName, cancellationToken);
+            var product = await store.SetProductImageUrlAsync(productId, url, cancellationToken);
+            return product is null ? NotFound() : Ok(product);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Problem(statusCode:503,title:"No se pudo guardar la imagen",detail:exception.Message);
+        }
+    }
+
+    [HttpDelete("products/{productId:long}/image")]
+    public async Task<ActionResult<AdminProduct>> DeleteProductImage(long productId, CancellationToken cancellationToken)
+    {
+        if (!(await store.GetProductsAsync(cancellationToken)).Any(product => product.Id == productId))
+            return NotFound();
+        try
+        {
+            await productImages.DeleteAsync(productId, cancellationToken);
+            var product = await store.SetProductImageUrlAsync(productId, null, cancellationToken);
+            return product is null ? NotFound() : Ok(product);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Problem(statusCode:503,title:"No se pudo eliminar la imagen",detail:exception.Message);
         }
     }
 
@@ -154,6 +202,16 @@ public sealed class AdminController(IAdminStore store) : ControllerBase
         statusCode: StatusCodes.Status400BadRequest,
         title: "Datos inválidos",
         detail: exception.Message);
+
+    private static bool IsSupportedImage(ReadOnlySpan<byte> bytes)
+    {
+        var jpeg = bytes.Length >= 3 && bytes[0] == 0xff && bytes[1] == 0xd8 && bytes[2] == 0xff;
+        var png = bytes.Length >= 8 && bytes[..8].SequenceEqual(new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a });
+        var webp = bytes.Length >= 12
+            && bytes[..4].SequenceEqual("RIFF"u8)
+            && bytes.Slice(8, 4).SequenceEqual("WEBP"u8);
+        return jpeg || png || webp;
+    }
 
     private async Task<ActionResult<AdminCategory>> SaveCategory(long? id, SaveAdminCategory category, CancellationToken token)
     {

@@ -51,7 +51,7 @@ public sealed class PostgresAdminStore(NpgsqlDataSource dataSource) : IAdminStor
     {
         await using var command = dataSource.CreateCommand("""
             SELECT p.id_producto, p.id_categoria, c.nombre_categoria, p.nombre_producto,
-                   p.descripcion, p.precio, p.activo, p.disponible, p.requiere_configuracion, p.orden
+                   p.descripcion, p.precio, p.imagen_url, p.activo, p.disponible, p.requiere_configuracion, p.orden
               FROM productos p
               JOIN categorias c ON c.id_categoria = p.id_categoria
              ORDER BY c.orden, p.orden, p.nombre_producto;
@@ -97,6 +97,22 @@ public sealed class PostgresAdminStore(NpgsqlDataSource dataSource) : IAdminStor
             RETURNING id_producto;
             """);
         AddProductParameters(command, product);
+        command.Parameters.AddWithValue("product_id", productId);
+        var id = await command.ExecuteScalarAsync(cancellationToken);
+        return id is null ? null : await GetProductAsync(productId, cancellationToken);
+    }
+
+    public async Task<AdminProduct?> SetProductImageUrlAsync(
+        long productId, string? imageUrl, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand("""
+            UPDATE productos
+               SET imagen_url=@image_url, actualizado_en=NOW()
+             WHERE id_producto=@product_id
+            RETURNING id_producto;
+            """);
+        command.Parameters.Add("image_url", NpgsqlTypes.NpgsqlDbType.Text).Value =
+            string.IsNullOrWhiteSpace(imageUrl) ? DBNull.Value : imageUrl.Trim();
         command.Parameters.AddWithValue("product_id", productId);
         var id = await command.ExecuteScalarAsync(cancellationToken);
         return id is null ? null : await GetProductAsync(productId, cancellationToken);
@@ -403,7 +419,7 @@ public sealed class PostgresAdminStore(NpgsqlDataSource dataSource) : IAdminStor
     {
         await using var command = dataSource.CreateCommand("""
             SELECT p.id_producto, p.id_categoria, c.nombre_categoria, p.nombre_producto,
-                   p.descripcion, p.precio, p.activo, p.disponible, p.requiere_configuracion, p.orden
+                   p.descripcion, p.precio, p.imagen_url, p.activo, p.disponible, p.requiere_configuracion, p.orden
               FROM productos p JOIN categorias c ON c.id_categoria = p.id_categoria
              WHERE p.id_producto = @id;
             """);
@@ -428,7 +444,8 @@ public sealed class PostgresAdminStore(NpgsqlDataSource dataSource) : IAdminStor
     private static AdminProduct ReadProduct(NpgsqlDataReader reader) => new(
         reader.GetInt64(0), reader.GetInt64(1), reader.GetString(2), reader.GetString(3),
         reader.IsDBNull(4) ? null : reader.GetString(4), reader.GetDecimal(5),
-        reader.GetBoolean(6), reader.GetBoolean(7), reader.GetBoolean(8), reader.GetInt32(9));
+        reader.IsDBNull(6) ? null : reader.GetString(6), reader.GetBoolean(7), reader.GetBoolean(8),
+        reader.GetBoolean(9), reader.GetInt32(10));
 
     private async Task<AdminCategory?> GetCategoryAsync(long id, CancellationToken cancellationToken)
     {

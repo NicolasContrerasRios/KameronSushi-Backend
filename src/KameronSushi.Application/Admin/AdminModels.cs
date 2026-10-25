@@ -5,7 +5,7 @@ public sealed record SaveAdminCategory(string Name, string? Description, bool Ac
 
 public sealed record AdminProduct(
     long Id, long CategoryId, string Category, string Name, string? Description,
-    decimal Price, bool Active, bool Available, bool RequiresConfiguration, int Order);
+    decimal Price, string? ImageUrl, bool Active, bool Available, bool RequiresConfiguration, int Order);
 
 public sealed record SaveAdminProduct(
     long CategoryId, string Name, string? Description, decimal Price,

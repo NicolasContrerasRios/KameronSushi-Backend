@@ -9,6 +9,7 @@ public interface IAdminStore
     Task<IReadOnlyList<AdminProduct>> GetProductsAsync(CancellationToken cancellationToken);
     Task<AdminProduct> CreateProductAsync(SaveAdminProduct product, CancellationToken cancellationToken);
     Task<AdminProduct?> UpdateProductAsync(long productId, SaveAdminProduct product, CancellationToken cancellationToken);
+    Task<AdminProduct?> SetProductImageUrlAsync(long productId, string? imageUrl, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminWrapper>> GetWrappersAsync(CancellationToken cancellationToken);
     Task<AdminWrapper> SaveWrapperAsync(long? wrapperId, SaveAdminWrapper wrapper, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminSauce>> GetSaucesAsync(CancellationToken cancellationToken);

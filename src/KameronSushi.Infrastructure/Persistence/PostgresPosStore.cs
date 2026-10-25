@@ -18,7 +18,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         {
             command.CommandText = """
                 SELECT p.id_producto, p.nombre_producto, c.nombre_categoria, p.descripcion,
-                       p.precio, p.disponible, p.requiere_configuracion
+                       p.precio, p.imagen_url, p.disponible, p.requiere_configuracion
                   FROM productos p
                   JOIN categorias c ON c.id_categoria = p.id_categoria
                   LEFT JOIN promociones_admin pa ON pa.id_producto = p.id_producto
@@ -35,7 +35,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                 products.Add(new ProductBuilder(
                     reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
                     reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetDecimal(4),
-                    reader.GetBoolean(5), reader.GetBoolean(6)));
+                    reader.IsDBNull(5) ? null : reader.GetString(5),
+                    reader.GetBoolean(6), reader.GetBoolean(7)));
             }
         }
 
@@ -1660,7 +1661,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
 
     private static CatalogProduct ToCatalogProduct(ProductBuilder product) =>
         new(product.Id, product.Name, product.Category, product.Description, product.Price,
-            product.Available, product.Options, product.Wrappers, product.Sauces, product.Selections);
+            product.ImageUrl, product.Available, product.Options, product.Wrappers, product.Sauces, product.Selections);
 
     private static void Add<T>(Dictionary<long, List<T>> values, long key, T item)
     {
@@ -1672,13 +1673,14 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         list.Add(item);
     }
 
-    private sealed class ProductBuilder(long id, string name, string category, string? description, decimal price, bool available, bool requiresConfiguration)
+    private sealed class ProductBuilder(long id, string name, string category, string? description, decimal price, string? imageUrl, bool available, bool requiresConfiguration)
     {
         public long Id { get; } = id;
         public string Name { get; } = name;
         public string Category { get; } = category;
         public string? Description { get; } = description;
         public decimal Price { get; } = price;
+        public string? ImageUrl { get; } = imageUrl;
         public bool Available { get; set; } = available;
         public bool RequiresConfiguration { get; } = requiresConfiguration;
         public List<CatalogRollOption> Options { get; } = [];

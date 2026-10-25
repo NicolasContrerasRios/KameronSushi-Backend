@@ -6,6 +6,7 @@ public sealed record CatalogProduct(
     string Category,
     string? Description,
     decimal Price,
+    string? ImageUrl,
     bool Available,
     IReadOnlyList<CatalogRollOption> Options,
     IReadOnlyList<CatalogWrapper> Wrappers,

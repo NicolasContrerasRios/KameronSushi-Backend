@@ -448,6 +448,17 @@ public static class DatabaseMigrations
             await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        if (!await IsAppliedAsync(connection, transaction, "016_product_images", cancellationToken))
+        {
+            await using var migrationCommand = connection.CreateCommand();
+            migrationCommand.Transaction = transaction;
+            migrationCommand.CommandText = """
+                ALTER TABLE productos ADD COLUMN IF NOT EXISTS imagen_url TEXT;
+                INSERT INTO schema_migrations(id) VALUES('016_product_images');
+                """;
+            await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
     }
 
