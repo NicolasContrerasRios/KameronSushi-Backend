@@ -179,6 +179,10 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             _ = RequiredCustomerText(delivery.Street, "calle", 150);
             _ = RequiredCustomerText(delivery.Number, "número", 20);
             _ = RequiredCustomerText(delivery.County, "comuna", 100);
+            if (!string.Equals(delivery.County.Trim(), "La Serena", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException("El delivery solo está disponible dentro de La Serena.");
+            }
             if (delivery.Reference?.Length > 1000)
                 throw new ArgumentException("La referencia no puede superar 1000 caracteres.");
         }
