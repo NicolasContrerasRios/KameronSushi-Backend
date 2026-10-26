@@ -29,8 +29,24 @@ public sealed class CustomerOrderingController(IPosStore store, ICustomerAppStor
         {
             var authorization = Request.Headers.Authorization.ToString();
             var token = authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase) ? authorization[7..].Trim() : null;
-            var customer = token is null ? null : await customerStore.GetSessionCustomerAsync(token, cancellationToken);
-            var created = await store.CreateCustomerOrderAsync(request, customer?.CustomerId, cancellationToken);
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                return Problem(
+                    statusCode: StatusCodes.Status401Unauthorized,
+                    title: "Sesión requerida",
+                    detail: "Inicia sesión en la aplicación antes de confirmar el pedido.");
+            }
+
+            var customer = await customerStore.GetSessionCustomerAsync(token, cancellationToken);
+            if (customer is null)
+            {
+                return Problem(
+                    statusCode: StatusCodes.Status401Unauthorized,
+                    title: "Sesión inválida o vencida",
+                    detail: "Vuelve a iniciar sesión antes de confirmar el pedido.");
+            }
+
+            var created = await store.CreateCustomerOrderAsync(request, customer.CustomerId, cancellationToken);
             return Created($"/api/customer/orders/{created.OrderId}", created);
         }
         catch (ArgumentException exception) when (exception.Message.StartsWith("LOCAL_CLOSED:", StringComparison.Ordinal))

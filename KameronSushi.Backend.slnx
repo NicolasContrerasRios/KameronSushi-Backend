@@ -5,4 +5,7 @@
     <Project Path="src/KameronSushi.Domain/KameronSushi.Domain.csproj" />
     <Project Path="src/KameronSushi.Infrastructure/KameronSushi.Infrastructure.csproj" />
   </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/KameronSushi.Tests/KameronSushi.Tests.csproj" />
+  </Folder>
 </Solution>
