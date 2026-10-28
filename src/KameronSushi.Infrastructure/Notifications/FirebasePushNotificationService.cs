@@ -133,16 +133,14 @@ public sealed class FirebasePushNotificationService(
                         settings.ServiceAccountPath);
                     return null;
                 }
-                FirebaseApp app;
+                FirebaseApp? app = null;
                 try { app = FirebaseApp.GetInstance(FirebaseAppName); }
-                catch (ArgumentException)
+                catch (ArgumentException) { /* Algunas versiones lanzan excepción si aún no existe. */ }
+                app ??= FirebaseApp.Create(new AppOptions
                 {
-                    app = FirebaseApp.Create(new AppOptions
-                    {
-                        Credential = CredentialFactory.FromJson<ServiceAccountCredential>(json).ToGoogleCredential(),
-                        ProjectId = settings.ProjectId
-                    }, FirebaseAppName);
-                }
+                    Credential = CredentialFactory.FromJson<ServiceAccountCredential>(json).ToGoogleCredential(),
+                    ProjectId = settings.ProjectId
+                }, FirebaseAppName);
                 messaging = FirebaseMessaging.GetMessaging(app);
                 return messaging;
             }
