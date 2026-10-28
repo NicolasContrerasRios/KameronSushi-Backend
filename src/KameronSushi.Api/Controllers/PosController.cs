@@ -9,7 +9,7 @@ namespace KameronSushi.Api.Controllers;
 [ApiController]
 [Authorize(Roles = "administrador,caja")]
 [Route("api/pos")]
-public sealed class PosController(IPosStore store) : ControllerBase
+public sealed class PosController(IPosStore store, IPushNotificationService notifications) : ControllerBase
 {
     [HttpGet("shifts/current")]
     public async Task<ActionResult<CashShift>> GetCurrentShift(CancellationToken cancellationToken)
@@ -23,7 +23,10 @@ public sealed class PosController(IPosStore store) : ControllerBase
     {
         try
         {
-            return Ok(await store.OpenShiftAsync(request.OpeningAmount, GetUserId(), cancellationToken));
+            var wasAlreadyOpen = await store.GetCurrentShiftAsync(cancellationToken) is not null;
+            var shift = await store.OpenShiftAsync(request.OpeningAmount, GetUserId(), cancellationToken);
+            if (!wasAlreadyOpen) await notifications.NotifyLocalOpenedAsync(cancellationToken);
+            return Ok(shift);
         }
         catch (ArgumentException exception)
         {
@@ -71,7 +74,7 @@ public sealed class PosController(IPosStore store) : ControllerBase
     private static readonly HashSet<string> ValidStatuses =
     [
         "borrador", "pendiente_pago", "confirmado", "en_preparacion",
-        "listo", "cancelado"
+        "listo", "en_reparto", "cancelado"
     ];
 
     [HttpGet("catalog")]
@@ -155,6 +158,21 @@ public sealed class PosController(IPosStore store) : ControllerBase
         catch (ArgumentException exception)
         {
             return Problem(statusCode: StatusCodes.Status400BadRequest, title: "Cancelación inválida", detail: exception.Message);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Problem(statusCode: StatusCodes.Status409Conflict, title: "Transición no permitida", detail: exception.Message);
+        }
+    }
+
+    [HttpPatch("orders/{orderId:long}/out-for-delivery")]
+    public async Task<IActionResult> MarkOutForDelivery(long orderId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (!await store.MarkOrderOutForDeliveryAsync(orderId, GetUserId(), cancellationToken)) return NotFound();
+            await notifications.NotifyOrderOutForDeliveryAsync(orderId, cancellationToken);
+            return NoContent();
         }
         catch (InvalidOperationException exception)
         {

@@ -319,6 +319,47 @@ public sealed class PostgresCustomerAppStore(
         return new CustomerHome(isOpen, profile, promotions, rewards);
     }
 
+    public async Task RegisterNotificationDeviceAsync(
+        long customerId, RegisterNotificationDevice request, CancellationToken cancellationToken)
+    {
+        var token = Required(request.DeviceToken, "token del dispositivo", 4096);
+        var platform = Required(request.Platform, "plataforma", 20).ToLowerInvariant();
+        if (platform != "android") throw new ArgumentException("La plataforma de notificaciones no es compatible.");
+        var deviceName = string.IsNullOrWhiteSpace(request.DeviceName)
+            ? null
+            : request.DeviceName.Trim()[..Math.Min(150, request.DeviceName.Trim().Length)];
+        await using var command = dataSource.CreateCommand("""
+            INSERT INTO dispositivos_notificacion_cliente
+                (id_cliente,token_fcm,plataforma,nombre_dispositivo,activo,registrado_en,ultimo_uso_en)
+            VALUES (@customer,@token,@platform,@device,TRUE,NOW(),NOW())
+            ON CONFLICT(token_fcm) DO UPDATE SET
+                id_cliente=EXCLUDED.id_cliente,
+                plataforma=EXCLUDED.plataforma,
+                nombre_dispositivo=EXCLUDED.nombre_dispositivo,
+                activo=TRUE,
+                ultimo_uso_en=NOW();
+            """);
+        command.Parameters.AddWithValue("customer", customerId);
+        command.Parameters.AddWithValue("token", token);
+        command.Parameters.AddWithValue("platform", platform);
+        command.Parameters.Add("device", NpgsqlDbType.Varchar).Value = (object?)deviceName ?? DBNull.Value;
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    public async Task DeactivateNotificationDeviceAsync(
+        long customerId, string deviceToken, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(deviceToken)) return;
+        await using var command = dataSource.CreateCommand("""
+            UPDATE dispositivos_notificacion_cliente
+               SET activo=FALSE,ultimo_uso_en=NOW()
+             WHERE id_cliente=@customer AND token_fcm=@token;
+            """);
+        command.Parameters.AddWithValue("customer", customerId);
+        command.Parameters.AddWithValue("token", deviceToken.Trim());
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
     private async Task<CustomerSession> CreateSessionAsync(long customerId, string? device, CancellationToken cancellationToken)
     {
         var token=Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+','-').Replace('/','_');

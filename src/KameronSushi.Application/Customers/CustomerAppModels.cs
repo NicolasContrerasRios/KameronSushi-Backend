@@ -12,3 +12,4 @@ public sealed record CustomerHome(bool IsOpen, CustomerProfile? Customer,
     IReadOnlyList<CustomerPromotion> Promotions, IReadOnlyList<CustomerReward> Rewards);
 public sealed record CustomerReward(long RewardProductId, long ProductId, string Name, string? Description,
     int PointsCost, int? Stock, int? LimitPerOrder, bool CanRedeem);
+public sealed record RegisterNotificationDevice(string DeviceToken, string Platform, string? DeviceName);

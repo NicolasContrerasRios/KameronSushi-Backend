@@ -835,7 +835,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             status = reader.GetString(0);
             customerId = reader.IsDBNull(1) ? null : reader.GetInt64(1);
         }
-        if (status is "listo" or "cancelado")
+        if (status is "listo" or "en_reparto" or "cancelado")
             throw new InvalidOperationException($"Un pedido en estado '{status}' no se puede cancelar.");
 
         await SetAuditContextAsync(connection, transaction, userId, "caja", normalizedReason, cancellationToken);
@@ -980,8 +980,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             command.CommandText = """
                 SELECT p.id_pedido, p.tipo_entrega, p.canal_origen,
                        COALESCE(cocina.iniciado_en, p.creado_en) AS iniciado_en,
-                       COALESCE(c.nombre, e.nombre_receptor),
-                       COALESCE(c.telefono, e.telefono_receptor),
+                       COALESCE(e.nombre_receptor, c.nombre),
+                       COALESCE(e.telefono_receptor, c.telefono),
                        CASE WHEN e.id_entrega IS NULL THEN NULL ELSE
                            CONCAT_WS(', ', CONCAT_WS(' ', e.calle, e.numero),
                                NULLIF(e.departamento, ''), e.comuna, NULLIF(e.referencia, ''))
@@ -1248,6 +1248,17 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
 
     public Task<bool> MarkOrderReadyAsync(long orderId, long userId, CancellationToken cancellationToken) =>
         ChangeOrderStateAsync(orderId, "en_preparacion", "listo", userId, "cocina", cancellationToken);
+
+    public async Task<bool> MarkOrderOutForDeliveryAsync(long orderId, long userId, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand("SELECT tipo_entrega FROM pedidos WHERE id_pedido=@id;");
+        command.Parameters.AddWithValue("id", orderId);
+        var deliveryType = await command.ExecuteScalarAsync(cancellationToken) as string;
+        if (deliveryType is null) return false;
+        if (!deliveryType.Equals("delivery", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Solo los pedidos delivery pueden marcarse en reparto.");
+        return await ChangeOrderStateAsync(orderId, "listo", "en_reparto", userId, "caja", cancellationToken);
+    }
 
     private async Task<bool> ChangeOrderStateAsync(
         long orderId, string expectedStatus, string newStatus, long userId, string source, CancellationToken cancellationToken)

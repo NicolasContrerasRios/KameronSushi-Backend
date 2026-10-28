@@ -35,6 +35,31 @@ public sealed class CustomerAccountController(ICustomerAppStore store, IGoogleTo
     [HttpGet("account")]
     public async Task<ActionResult<CustomerProfile>> Account(CancellationToken ct){var profile=await Current(ct);return profile is null?Unauthorized():Ok(profile);}
 
+    [HttpPost("notifications/devices")]
+    public async Task<IActionResult> RegisterNotificationDevice(RegisterNotificationDevice request, CancellationToken ct)
+    {
+        var profile = await Current(ct);
+        if (profile is null) return Unauthorized();
+        try
+        {
+            await store.RegisterNotificationDeviceAsync(profile.CustomerId, request, ct);
+            return NoContent();
+        }
+        catch (ArgumentException exception)
+        {
+            return Problem(statusCode: 400, title: "Dispositivo inválido", detail: exception.Message);
+        }
+    }
+
+    [HttpDelete("notifications/devices")]
+    public async Task<IActionResult> DeactivateNotificationDevice([FromQuery] string token, CancellationToken ct)
+    {
+        var profile = await Current(ct);
+        if (profile is null) return Unauthorized();
+        await store.DeactivateNotificationDeviceAsync(profile.CustomerId, token, ct);
+        return NoContent();
+    }
+
     private async Task<CustomerProfile?> Current(CancellationToken ct){var token=Bearer();return token is null?null:await store.GetSessionCustomerAsync(token,ct);}
     private string? Bearer(){var value=Request.Headers.Authorization.ToString();return value.StartsWith("Bearer ",StringComparison.OrdinalIgnoreCase)?value[7..].Trim():null;}
 }

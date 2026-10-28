@@ -3,6 +3,7 @@ using KameronSushi.Infrastructure.Configuration;
 using KameronSushi.Infrastructure.Auth;
 using KameronSushi.Infrastructure.Persistence;
 using KameronSushi.Infrastructure.Images;
+using KameronSushi.Infrastructure.Notifications;
 using KameronSushi.Infrastructure.WhatsApp;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -21,6 +22,7 @@ public static class DependencyInjection
         services.Configure<AuthOptions>(configuration.GetSection(AuthOptions.SectionName));
         services.Configure<GoogleAuthOptions>(configuration.GetSection(GoogleAuthOptions.SectionName));
         services.Configure<CloudinaryOptions>(configuration.GetSection(CloudinaryOptions.SectionName));
+        services.Configure<FirebaseOptions>(configuration.GetSection(FirebaseOptions.SectionName));
 
         services.AddSingleton(provider =>
         {
@@ -41,6 +43,7 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddSingleton<IGoogleTokenValidator, GoogleTokenValidator>();
         services.AddSingleton<IProductImageStorage, CloudinaryProductImageStorage>();
+        services.AddSingleton<IPushNotificationService, FirebasePushNotificationService>();
         services.AddSingleton<IWebhookSignatureValidator, MetaWebhookSignatureValidator>();
         services.AddSingleton<TwilioWebhookSignatureValidator>();
         services.AddScoped<TwilioTwiMlMessageSender>();

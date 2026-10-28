@@ -10,4 +10,6 @@ public interface ICustomerAppStore
     Task<CustomerProfile?> GetSessionCustomerAsync(string token, CancellationToken cancellationToken);
     Task RevokeSessionAsync(string token, CancellationToken cancellationToken);
     Task<CustomerHome> GetHomeAsync(long? customerId, CancellationToken cancellationToken);
+    Task RegisterNotificationDeviceAsync(long customerId, RegisterNotificationDevice request, CancellationToken cancellationToken);
+    Task DeactivateNotificationDeviceAsync(long customerId, string deviceToken, CancellationToken cancellationToken);
 }

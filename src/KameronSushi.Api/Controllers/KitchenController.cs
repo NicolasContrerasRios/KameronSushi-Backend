@@ -9,7 +9,7 @@ namespace KameronSushi.Api.Controllers;
 [ApiController]
 [Authorize(Roles = "administrador,cocina")]
 [Route("api/kitchen/orders")]
-public sealed class KitchenController(IPosStore store) : ControllerBase
+public sealed class KitchenController(IPosStore store, IPushNotificationService notifications) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<IReadOnlyList<KitchenOrderSummary>>> GetOrders(CancellationToken cancellationToken) =>
@@ -24,7 +24,9 @@ public sealed class KitchenController(IPosStore store) : ControllerBase
     {
         try
         {
-            return await store.MarkOrderReadyAsync(orderId, GetUserId(), cancellationToken) ? NoContent() : NotFound();
+            if (!await store.MarkOrderReadyAsync(orderId, GetUserId(), cancellationToken)) return NotFound();
+            await notifications.NotifyOrderReadyAsync(orderId, cancellationToken);
+            return NoContent();
         }
         catch (InvalidOperationException exception)
         {
