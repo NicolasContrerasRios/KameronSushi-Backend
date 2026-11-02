@@ -504,6 +504,23 @@ public static class DatabaseMigrations
             await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        if (!await IsAppliedAsync(connection, transaction, "018_product_offer_prices", cancellationToken))
+        {
+            await using var migrationCommand = connection.CreateCommand();
+            migrationCommand.Transaction = transaction;
+            migrationCommand.CommandText = """
+                ALTER TABLE promociones_admin
+                    ADD COLUMN IF NOT EXISTS precio_oferta NUMERIC(12,2);
+                ALTER TABLE promociones_admin
+                    DROP CONSTRAINT IF EXISTS ck_promocion_precio_oferta;
+                ALTER TABLE promociones_admin
+                    ADD CONSTRAINT ck_promocion_precio_oferta
+                    CHECK (precio_oferta IS NULL OR precio_oferta > 0);
+                INSERT INTO schema_migrations(id) VALUES('018_product_offer_prices');
+                """;
+            await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
     }
 

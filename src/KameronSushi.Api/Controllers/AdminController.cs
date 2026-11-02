@@ -159,6 +159,13 @@ public sealed class AdminController(IAdminStore store, IProductImageStorage prod
     public Task<ActionResult<AdminPromotion>> UpdatePromotion(long promotionId, SaveAdminPromotion promotion, CancellationToken token) =>
         SavePromotion(promotionId, promotion, token);
 
+    [HttpPost("promotions/{promotionId:long}/disable")]
+    public async Task<ActionResult<AdminPromotion>> DisablePromotion(long promotionId, CancellationToken token)
+    {
+        var result = await store.DisablePromotionAsync(promotionId, token);
+        return result is null ? NotFound() : Ok(result);
+    }
+
     [HttpGet("customers")]
     public async Task<ActionResult<IReadOnlyList<AdminCustomer>>> GetCustomers([FromQuery]string? search,CancellationToken token)=>Ok(await store.GetCustomersAsync(search,token));
     [HttpGet("customers/{customerId:long}/points")]

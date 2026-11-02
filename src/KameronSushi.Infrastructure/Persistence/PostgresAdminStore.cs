@@ -136,8 +136,8 @@ public sealed class PostgresAdminStore(NpgsqlDataSource dataSource) : IAdminStor
     public async Task<IReadOnlyList<AdminPromotion>> GetPromotionsAsync(CancellationToken cancellationToken)
     {
         await using var command=dataSource.CreateCommand("""
-            SELECT a.id_promocion,a.id_producto,p.nombre_producto,p.precio,a.productos_incluidos,a.salsas_incluidas,
-                   a.vigente_desde,a.vigente_hasta,a.habilitada_retiro,a.habilitada_delivery,a.activa
+            SELECT a.id_promocion,a.id_producto,p.nombre_producto,p.precio,a.precio_oferta,
+                   a.vigente_desde,a.vigente_hasta,a.activa
               FROM promociones_admin a JOIN productos p ON p.id_producto=a.id_producto ORDER BY p.nombre_producto;
             """);await using var reader=await command.ExecuteReaderAsync(cancellationToken);var result=new List<AdminPromotion>();while(await reader.ReadAsync(cancellationToken))result.Add(ReadPromotion(reader));return result;
     }
@@ -225,19 +225,33 @@ public sealed class PostgresAdminStore(NpgsqlDataSource dataSource) : IAdminStor
 
     public async Task<AdminPromotion> SavePromotionAsync(long? promotionId,SaveAdminPromotion promotion,CancellationToken cancellationToken)
     {
-        if(promotion.ProductId<=0)throw new ArgumentException("Selecciona el producto de la promoción.");if(promotion.IncludedSauces<0)throw new ArgumentException("La cantidad de salsas no puede ser negativa.");if(!promotion.PickupEnabled&&!promotion.DeliveryEnabled)throw new ArgumentException("Habilita al menos un tipo de entrega.");if(promotion.StartsAt is not null&&promotion.EndsAt<=promotion.StartsAt)throw new ArgumentException("El término debe ser posterior al inicio.");
+        if(promotion.ProductId<=0)throw new ArgumentException("Selecciona el producto de la promoción.");if(promotion.OfferPrice<=0)throw new ArgumentException("El precio oferta debe ser mayor que cero.");if(promotion.StartsAt is not null&&promotion.EndsAt<=promotion.StartsAt)throw new ArgumentException("El término debe ser posterior al inicio.");
+        await using(var priceCommand=dataSource.CreateCommand("SELECT precio FROM productos WHERE id_producto=@product AND activo=TRUE;"))
+        {
+            priceCommand.Parameters.AddWithValue("product",promotion.ProductId);
+            var originalValue=await priceCommand.ExecuteScalarAsync(cancellationToken);
+            if(originalValue is null)throw new ArgumentException("El producto seleccionado no existe o está inactivo.");
+            if(promotion.OfferPrice>=Convert.ToDecimal(originalValue))throw new ArgumentException("El precio oferta debe ser menor que el precio normal del producto.");
+        }
         await using var command=dataSource.CreateCommand(promotionId is null?"""
-            INSERT INTO promociones_admin(id_producto,productos_incluidos,salsas_incluidas,vigente_desde,vigente_hasta,habilitada_retiro,habilitada_delivery,activa)
-            VALUES(@product,@included,@sauces,@starts,@ends,@pickup,@delivery,@active) RETURNING id_promocion;
+            INSERT INTO promociones_admin(id_producto,precio_oferta,vigente_desde,vigente_hasta,habilitada_retiro,habilitada_delivery,activa)
+            VALUES(@product,@offer,@starts,@ends,TRUE,TRUE,@active) RETURNING id_promocion;
             """:"""
-            UPDATE promociones_admin SET id_producto=@product,productos_incluidos=@included,salsas_incluidas=@sauces,vigente_desde=@starts,vigente_hasta=@ends,habilitada_retiro=@pickup,habilitada_delivery=@delivery,activa=@active,actualizado_en=NOW()
+            UPDATE promociones_admin SET id_producto=@product,precio_oferta=@offer,vigente_desde=@starts,vigente_hasta=@ends,habilitada_retiro=TRUE,habilitada_delivery=TRUE,activa=@active,actualizado_en=NOW()
              WHERE id_promocion=@id RETURNING id_promocion;
-            """);command.Parameters.AddWithValue("product",promotion.ProductId);command.Parameters.Add("included",NpgsqlTypes.NpgsqlDbType.Text).Value=string.IsNullOrWhiteSpace(promotion.IncludedProducts)?DBNull.Value:promotion.IncludedProducts.Trim();command.Parameters.AddWithValue("sauces",promotion.IncludedSauces);command.Parameters.Add("starts",NpgsqlTypes.NpgsqlDbType.TimestampTz).Value=(object?)promotion.StartsAt??DBNull.Value;command.Parameters.Add("ends",NpgsqlTypes.NpgsqlDbType.TimestampTz).Value=(object?)promotion.EndsAt??DBNull.Value;command.Parameters.AddWithValue("pickup",promotion.PickupEnabled);command.Parameters.AddWithValue("delivery",promotion.DeliveryEnabled);command.Parameters.AddWithValue("active",promotion.Active);if(promotionId is not null)command.Parameters.AddWithValue("id",promotionId.Value);
+            """);command.Parameters.AddWithValue("product",promotion.ProductId);command.Parameters.AddWithValue("offer",promotion.OfferPrice);command.Parameters.Add("starts",NpgsqlTypes.NpgsqlDbType.TimestampTz).Value=(object?)promotion.StartsAt??DBNull.Value;command.Parameters.Add("ends",NpgsqlTypes.NpgsqlDbType.TimestampTz).Value=(object?)promotion.EndsAt??DBNull.Value;command.Parameters.AddWithValue("active",promotion.Active);if(promotionId is not null)command.Parameters.AddWithValue("id",promotionId.Value);
         try{var id=Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken)??throw new ArgumentException("La promoción no existe."));return (await GetPromotionAsync(id,cancellationToken))!;}catch(PostgresException exception)when(exception.SqlState==PostgresErrorCodes.UniqueViolation){throw new ArgumentException("Ese producto ya tiene una promoción configurada.");}
     }
 
-    private async Task<AdminPromotion?> GetPromotionAsync(long id,CancellationToken token){await using var command=dataSource.CreateCommand("SELECT a.id_promocion,a.id_producto,p.nombre_producto,p.precio,a.productos_incluidos,a.salsas_incluidas,a.vigente_desde,a.vigente_hasta,a.habilitada_retiro,a.habilitada_delivery,a.activa FROM promociones_admin a JOIN productos p ON p.id_producto=a.id_producto WHERE a.id_promocion=@id;");command.Parameters.AddWithValue("id",id);await using var reader=await command.ExecuteReaderAsync(token);return await reader.ReadAsync(token)?ReadPromotion(reader):null;}
-    private static AdminPromotion ReadPromotion(NpgsqlDataReader reader)=>new(reader.GetInt64(0),reader.GetInt64(1),reader.GetString(2),reader.GetDecimal(3),reader.IsDBNull(4)?null:reader.GetString(4),reader.GetInt32(5),reader.IsDBNull(6)?null:reader.GetFieldValue<DateTimeOffset>(6),reader.IsDBNull(7)?null:reader.GetFieldValue<DateTimeOffset>(7),reader.GetBoolean(8),reader.GetBoolean(9),reader.GetBoolean(10));
+    public async Task<AdminPromotion?> DisablePromotionAsync(long promotionId,CancellationToken cancellationToken)
+    {
+        await using var command=dataSource.CreateCommand("UPDATE promociones_admin SET activa=FALSE,actualizado_en=NOW() WHERE id_promocion=@id RETURNING id_promocion;");
+        command.Parameters.AddWithValue("id",promotionId);
+        return await command.ExecuteScalarAsync(cancellationToken) is null?null:await GetPromotionAsync(promotionId,cancellationToken);
+    }
+
+    private async Task<AdminPromotion?> GetPromotionAsync(long id,CancellationToken token){await using var command=dataSource.CreateCommand("SELECT a.id_promocion,a.id_producto,p.nombre_producto,p.precio,a.precio_oferta,a.vigente_desde,a.vigente_hasta,a.activa FROM promociones_admin a JOIN productos p ON p.id_producto=a.id_producto WHERE a.id_promocion=@id;");command.Parameters.AddWithValue("id",id);await using var reader=await command.ExecuteReaderAsync(token);return await reader.ReadAsync(token)?ReadPromotion(reader):null;}
+    private static AdminPromotion ReadPromotion(NpgsqlDataReader reader)=>new(reader.GetInt64(0),reader.GetInt64(1),reader.GetString(2),reader.GetDecimal(3),reader.IsDBNull(4)?null:reader.GetDecimal(4),reader.IsDBNull(5)?null:reader.GetFieldValue<DateTimeOffset>(5),reader.IsDBNull(6)?null:reader.GetFieldValue<DateTimeOffset>(6),reader.GetBoolean(7));
 
     public async Task<IReadOnlyList<AdminWrapper>> GetWrappersAsync(CancellationToken cancellationToken)
     {

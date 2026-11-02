@@ -260,6 +260,37 @@ public sealed class PostgresCustomerAppStore(
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
+    public async Task<bool> DeleteAccountAsync(long customerId,CancellationToken cancellationToken)
+    {
+        await using var connection=await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction=await connection.BeginTransactionAsync(IsolationLevel.Serializable,cancellationToken);
+        await using var command=connection.CreateCommand();
+        command.Transaction=transaction;
+        command.CommandText="""
+            UPDATE entregas_pedido e
+               SET nombre_receptor='Cliente eliminado',telefono_receptor='eliminado',
+                   calle='Datos eliminados',numero='-',departamento=NULL,
+                   comuna='La Serena',referencia=NULL,actualizado_en=NOW()
+              FROM pedidos p
+             WHERE e.id_pedido=p.id_pedido AND p.id_cliente=@customer;
+
+            UPDATE pedidos SET id_cliente=NULL WHERE id_cliente=@customer;
+            UPDATE conversaciones_whatsapp
+               SET id_cliente=NULL,wa_id='eliminado-'||id_conversacion,
+                   telefono='eliminado',contexto='{}'::jsonb,estado='finalizada',actualizado_en=NOW()
+             WHERE id_cliente=@customer;
+
+            DELETE FROM movimiento_puntos
+             WHERE id_cuenta IN (SELECT id_cuenta FROM cuentas_fidelizacion WHERE id_cliente=@customer);
+            DELETE FROM cuentas_fidelizacion WHERE id_cliente=@customer;
+            DELETE FROM clientes WHERE id_cliente=@customer;
+            """;
+        command.Parameters.AddWithValue("customer",customerId);
+        var affected=await command.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return affected>0;
+    }
+
     public async Task<CustomerHome> GetHomeAsync(long? customerId, CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
@@ -281,9 +312,10 @@ public sealed class PostgresCustomerAppStore(
         {
             command.CommandText = """
                 SELECT a.id_promocion,p.id_producto,p.nombre_producto,p.descripcion,p.precio,
-                       a.productos_incluidos,a.salsas_incluidas,a.habilitada_retiro,a.habilitada_delivery
+                       a.precio_oferta,a.habilitada_retiro,a.habilitada_delivery
                   FROM promociones_admin a JOIN productos p ON p.id_producto=a.id_producto
-                 WHERE a.activa AND p.activo AND p.disponible
+                 WHERE a.activa AND a.precio_oferta IS NOT NULL AND a.precio_oferta < p.precio
+                   AND p.activo AND p.disponible
                    AND (a.vigente_desde IS NULL OR a.vigente_desde<=NOW())
                    AND (a.vigente_hasta IS NULL OR a.vigente_hasta>NOW())
                  ORDER BY a.actualizado_en DESC,p.nombre_producto;
@@ -291,7 +323,7 @@ public sealed class PostgresCustomerAppStore(
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken)) promotions.Add(new(
                 reader.GetInt64(0),reader.GetInt64(1),reader.GetString(2),reader.IsDBNull(3)?null:reader.GetString(3),
-                reader.GetDecimal(4),reader.IsDBNull(5)?null:reader.GetString(5),reader.GetInt32(6),reader.GetBoolean(7),reader.GetBoolean(8)));
+                reader.GetDecimal(4),reader.GetDecimal(5),reader.GetBoolean(6),reader.GetBoolean(7)));
         }
         var rewards = new List<CustomerReward>();
         await using (var command = connection.CreateCommand())

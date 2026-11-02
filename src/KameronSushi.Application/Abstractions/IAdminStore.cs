@@ -18,6 +18,7 @@ public interface IAdminStore
     Task<AdminProductConfiguration?> SaveProductConfigurationAsync(long productId, SaveAdminProductConfiguration configuration, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminPromotion>> GetPromotionsAsync(CancellationToken cancellationToken);
     Task<AdminPromotion> SavePromotionAsync(long? promotionId, SaveAdminPromotion promotion, CancellationToken cancellationToken);
+    Task<AdminPromotion?> DisablePromotionAsync(long promotionId, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminCustomer>> GetCustomersAsync(string? search, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminPointMovement>> GetCustomerPointMovementsAsync(long customerId, CancellationToken cancellationToken);
     Task<AdminCustomer?> AdjustCustomerPointsAsync(long customerId, AdjustCustomerPoints adjustment, CancellationToken cancellationToken);

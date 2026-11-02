@@ -127,6 +127,7 @@ CREATE TABLE promociones_admin (
     id_promocion          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id_producto           BIGINT NOT NULL UNIQUE
         REFERENCES productos(id_producto) ON DELETE RESTRICT,
+    precio_oferta         NUMERIC(12,2) CHECK (precio_oferta IS NULL OR precio_oferta > 0),
     productos_incluidos   TEXT,
     salsas_incluidas      INTEGER NOT NULL DEFAULT 0 CHECK (salsas_incluidas >= 0),
     vigente_desde         TIMESTAMPTZ,

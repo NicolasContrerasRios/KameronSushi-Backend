@@ -29,13 +29,11 @@ public sealed record SaveAdminProductConfiguration(
     IReadOnlyList<SaveAdminProductWrapper> Wrappers, IReadOnlyList<SaveAdminRollOption> Options);
 
 public sealed record AdminPromotion(
-    long PromotionId, long ProductId, string ProductName, decimal Price, string? IncludedProducts,
-    int IncludedSauces, DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,
-    bool PickupEnabled, bool DeliveryEnabled, bool Active);
+    long PromotionId, long ProductId, string ProductName, decimal OriginalPrice, decimal? OfferPrice,
+    DateTimeOffset? StartsAt, DateTimeOffset? EndsAt, bool Active);
 public sealed record SaveAdminPromotion(
-    long ProductId, string? IncludedProducts, int IncludedSauces,
-    DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,
-    bool PickupEnabled = true, bool DeliveryEnabled = true, bool Active = true);
+    long ProductId, decimal OfferPrice, DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,
+    bool Active = true);
 public sealed record AdminCustomer(long CustomerId,string Name,string Phone,string? Email,int Points,int AccumulatedPoints,int RedeemedPoints,string Status);
 public sealed record AdminPointMovement(long MovementId,string Type,int Points,int PreviousBalance,int ResultingBalance,string? Description,DateTimeOffset CreatedAt);
 public sealed record AdjustCustomerPoints(int Points,string Reason);

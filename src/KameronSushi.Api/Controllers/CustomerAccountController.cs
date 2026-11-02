@@ -35,6 +35,14 @@ public sealed class CustomerAccountController(ICustomerAppStore store, IGoogleTo
     [HttpGet("account")]
     public async Task<ActionResult<CustomerProfile>> Account(CancellationToken ct){var profile=await Current(ct);return profile is null?Unauthorized():Ok(profile);}
 
+    [HttpDelete("account")]
+    public async Task<IActionResult> DeleteAccount(CancellationToken ct)
+    {
+        var profile=await Current(ct);
+        if(profile is null)return Unauthorized();
+        return await store.DeleteAccountAsync(profile.CustomerId,ct)?NoContent():NotFound();
+    }
+
     [HttpPost("notifications/devices")]
     public async Task<IActionResult> RegisterNotificationDevice(RegisterNotificationDevice request, CancellationToken ct)
     {

@@ -18,15 +18,25 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         {
             command.CommandText = """
                 SELECT p.id_producto, p.nombre_producto, c.nombre_categoria, p.descripcion,
-                       p.precio, p.imagen_url, p.disponible, p.requiere_configuracion
+                       CASE WHEN pa.id_promocion IS NOT NULL
+                                  AND pa.activa = TRUE
+                                  AND pa.precio_oferta IS NOT NULL
+                                  AND pa.precio_oferta < p.precio
+                                  AND (pa.vigente_desde IS NULL OR pa.vigente_desde <= NOW())
+                                  AND (pa.vigente_hasta IS NULL OR pa.vigente_hasta > NOW())
+                            THEN pa.precio_oferta ELSE p.precio END AS precio_vigente,
+                       CASE WHEN pa.id_promocion IS NOT NULL
+                                  AND pa.activa = TRUE
+                                  AND pa.precio_oferta IS NOT NULL
+                                  AND pa.precio_oferta < p.precio
+                                  AND (pa.vigente_desde IS NULL OR pa.vigente_desde <= NOW())
+                                  AND (pa.vigente_hasta IS NULL OR pa.vigente_hasta > NOW())
+                            THEN p.precio ELSE NULL END AS precio_original,
+                       p.imagen_url, p.disponible, p.requiere_configuracion
                   FROM productos p
                   JOIN categorias c ON c.id_categoria = p.id_categoria
                   LEFT JOIN promociones_admin pa ON pa.id_producto = p.id_producto
                  WHERE p.activo = TRUE AND c.activa = TRUE
-                   AND (pa.id_promocion IS NULL OR (
-                       pa.activa = TRUE AND pa.habilitada_retiro = TRUE
-                       AND (pa.vigente_desde IS NULL OR pa.vigente_desde <= NOW())
-                       AND (pa.vigente_hasta IS NULL OR pa.vigente_hasta > NOW())))
                  ORDER BY c.orden, p.orden, p.nombre_producto;
                 """;
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -35,8 +45,9 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                 products.Add(new ProductBuilder(
                     reader.GetInt64(0), reader.GetString(1), reader.GetString(2),
                     reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetDecimal(4),
-                    reader.IsDBNull(5) ? null : reader.GetString(5),
-                    reader.GetBoolean(6), reader.GetBoolean(7)));
+                    reader.IsDBNull(5) ? null : reader.GetDecimal(5),
+                    reader.IsDBNull(6) ? null : reader.GetString(6),
+                    reader.GetBoolean(7), reader.GetBoolean(8)));
             }
         }
 
@@ -1490,10 +1501,18 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         await using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = """
-            SELECT p.nombre_producto, p.precio, p.requiere_configuracion,
+            SELECT p.nombre_producto,
+                   COALESCE(CASE WHEN pa.activa = TRUE
+                                      AND pa.precio_oferta IS NOT NULL
+                                      AND pa.precio_oferta < p.precio
+                                      AND (pa.vigente_desde IS NULL OR pa.vigente_desde <= NOW())
+                                      AND (pa.vigente_hasta IS NULL OR pa.vigente_hasta > NOW())
+                                 THEN pa.precio_oferta END, p.precio),
+                   p.requiere_configuracion,
                    o.numero_opcion, o.ingredientes, o.id_producto_envoltura_fija,
                    pe.precio_adicional, e.nombre, s.nombre, p.descripcion
               FROM productos p
+              LEFT JOIN promociones_admin pa ON pa.id_producto = p.id_producto
               LEFT JOIN opciones_roll o
                 ON o.id_opcion_roll = @option_id AND o.id_producto = p.id_producto
                AND (@historical = TRUE OR o.activa = TRUE)
@@ -1676,7 +1695,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
 
     private static CatalogProduct ToCatalogProduct(ProductBuilder product) =>
         new(product.Id, product.Name, product.Category, product.Description, product.Price,
-            product.ImageUrl, product.Available, product.Options, product.Wrappers, product.Sauces, product.Selections);
+            product.OriginalPrice, product.ImageUrl, product.Available, product.Options, product.Wrappers, product.Sauces, product.Selections);
 
     private static void Add<T>(Dictionary<long, List<T>> values, long key, T item)
     {
@@ -1688,13 +1707,14 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         list.Add(item);
     }
 
-    private sealed class ProductBuilder(long id, string name, string category, string? description, decimal price, string? imageUrl, bool available, bool requiresConfiguration)
+    private sealed class ProductBuilder(long id, string name, string category, string? description, decimal price, decimal? originalPrice, string? imageUrl, bool available, bool requiresConfiguration)
     {
         public long Id { get; } = id;
         public string Name { get; } = name;
         public string Category { get; } = category;
         public string? Description { get; } = description;
         public decimal Price { get; } = price;
+        public decimal? OriginalPrice { get; } = originalPrice;
         public string? ImageUrl { get; } = imageUrl;
         public bool Available { get; set; } = available;
         public bool RequiresConfiguration { get; } = requiresConfiguration;

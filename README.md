@@ -219,7 +219,8 @@ Al iniciar, el backend registra y aplica sus migraciones pendientes en la tabla 
 | `GET/POST/PUT` | `/api/admin/wrappers` | Administra envolturas. |
 | `GET/POST/PUT` | `/api/admin/sauces` | Administra salsas. |
 | `GET/PUT` | `/api/admin/products/{productId}/configuration` | Consulta o reemplaza opciones y envolturas de un roll configurable. |
-| `GET/POST/PUT` | `/api/admin/promotions` | Administra vigencia, canal, salsas y contenido de promociones. |
+| `GET/POST/PUT` | `/api/admin/promotions` | Administra el precio oferta y su vigencia por producto. El backend valida que sea menor al precio normal. |
+| `POST` | `/api/admin/promotions/{promotionId}/disable` | Finaliza manualmente una oferta y restablece el precio normal. |
 | `GET` | `/api/admin/rewards` | Lista la configuración de productos canjeables. |
 | `POST` | `/api/admin/rewards` | Crea o actualiza coste, stock, límite y estado de un canje. |
 | `DELETE` | `/api/admin/rewards/{rewardId}` | Desactiva un producto canjeable. |
