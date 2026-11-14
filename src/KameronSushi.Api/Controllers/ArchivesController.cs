@@ -47,12 +47,12 @@ public sealed class ArchivesController(IArchiveStore store) : ControllerBase
             return Problem(statusCode: 400, title: "Hash inválido", detail: "Debes confirmar el SHA-256 del archivo guardado.");
         try
         {
-            return Ok(await store.ConfirmAndPurgeAsync(
+            return Ok(await store.ConfirmBackupAsync(
                 new DateOnly(year, month, 1), request.Sha256.Trim().ToLowerInvariant(), GetUserId(), cancellationToken));
         }
         catch (ArgumentException exception)
         {
-            return Problem(statusCode: 400, title: "No se puede depurar", detail: exception.Message);
+            return Problem(statusCode: 400, title: "No se puede confirmar el respaldo", detail: exception.Message);
         }
     }
 

@@ -23,8 +23,8 @@ public sealed class PostgresArchiveStore(NpgsqlDataSource dataSource) : IArchive
                  WHERE fecha < (date_trunc('month', NOW() AT TIME ZONE 'America/Santiago') AT TIME ZONE 'America/Santiago')
             )
             SELECT m.inicio, (m.inicio + INTERVAL '1 month')::date,
-                   (m.inicio + INTERVAL '1 month') <= ((NOW() AT TIME ZONE 'America/Santiago')::date - 60),
-                   (m.inicio + INTERVAL '1 month') <= (date_trunc('month', NOW() AT TIME ZONE 'America/Santiago') - INTERVAL '3 months')::date,
+                   FALSE,
+                   FALSE,
                    NOT EXISTS (
                        SELECT 1 FROM pedidos p
                         WHERE p.creado_en >= (m.inicio::timestamp AT TIME ZONE 'America/Santiago')
@@ -168,19 +168,10 @@ public sealed class PostgresArchiveStore(NpgsqlDataSource dataSource) : IArchive
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    public async Task<ArchivePurgeResult> ConfirmAndPurgeAsync(
+    public async Task<ArchivePurgeResult> ConfirmBackupAsync(
         DateOnly periodStart, string sha256, long userId, CancellationToken cancellationToken)
     {
         ValidatePeriod(periodStart);
-        var periodEnd = periodStart.AddMonths(1);
-        var localNow = TimeZoneInfo.ConvertTime(DateTimeOffset.UtcNow, ChileTimeZone);
-        var retentionBoundary = new DateOnly(localNow.Year, localNow.Month, 1).AddMonths(-3);
-        var localDate = DateOnly.FromDateTime(localNow.DateTime);
-        var messagesEligible = periodEnd <= localDate.AddDays(-60);
-        var fullPurgeEligible = periodEnd <= retentionBoundary;
-        if (!messagesEligible && !fullPurgeEligible)
-            throw new ArgumentException("El período todavía está dentro de la retención configurada.");
-
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using (var lockCommand = connection.CreateCommand())
@@ -191,13 +182,13 @@ public sealed class PostgresArchiveStore(NpgsqlDataSource dataSource) : IArchive
             await lockCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        DateTimeOffset? existingConfirmation;
         DateTimeOffset? existingMessagePurge;
+        DateTimeOffset? existingPurge;
         await using (var validate = connection.CreateCommand())
         {
             validate.Transaction = transaction;
             validate.CommandText = """
-                SELECT confirmado_en,mensajes_purgados_en,purgado_en,preparado_en
+                SELECT mensajes_purgados_en,purgado_en
                   FROM archivos_mensuales
                  WHERE periodo_inicio=@start AND sha256=@sha
                  FOR UPDATE;
@@ -207,142 +198,24 @@ public sealed class PostgresArchiveStore(NpgsqlDataSource dataSource) : IArchive
             await using var reader = await validate.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken))
                 throw new ArgumentException("El archivo no coincide con el preparado por el servidor.");
-            existingConfirmation = reader.IsDBNull(0) ? null : reader.GetFieldValue<DateTimeOffset>(0);
-            existingMessagePurge = reader.IsDBNull(1) ? null : reader.GetFieldValue<DateTimeOffset>(1);
-            if (!reader.IsDBNull(2)) throw new ArgumentException("El período ya fue depurado.");
-            var preparedAt = reader.GetFieldValue<DateTimeOffset>(3);
-            if (existingConfirmation is null && preparedAt < DateTimeOffset.UtcNow.AddHours(-1))
-                throw new ArgumentException("La preparación expiró. Descarga nuevamente el archivo antes de confirmarlo.");
+            existingMessagePurge = reader.IsDBNull(0) ? null : reader.GetFieldValue<DateTimeOffset>(0);
+            existingPurge = reader.IsDBNull(1) ? null : reader.GetFieldValue<DateTimeOffset>(1);
         }
-
-        await EnsurePeriodIsClosedAsync(connection, transaction, periodStart, periodEnd, cancellationToken);
-
-        var deletedMessages = 0;
-        DateTimeOffset? messagesPurgedAt = existingMessagePurge;
-        if (messagesEligible && existingMessagePurge is null)
-        {
-            deletedMessages = await ExecuteAsync(connection, transaction,
-                "DELETE FROM mensajes_whatsapp WHERE creado_en >= (@start::date::timestamp AT TIME ZONE 'America/Santiago') AND creado_en < (@end::date::timestamp AT TIME ZONE 'America/Santiago');",
-                periodStart, periodEnd, cancellationToken);
-            messagesPurgedAt = DateTimeOffset.UtcNow;
-        }
-
-        var deletedOrders = 0;
-        var deletedShifts = 0;
-        DateTimeOffset? purgedAt = null;
-        if (fullPurgeEligible)
-        {
-            await ExecuteFullPurgePreparationAsync(connection, transaction, periodStart, periodEnd, cancellationToken);
-            deletedOrders = await ExecuteAsync(connection, transaction, """
-                DELETE FROM pedidos
-                 WHERE creado_en >= (@start::date::timestamp AT TIME ZONE 'America/Santiago')
-                   AND creado_en < (@end::date::timestamp AT TIME ZONE 'America/Santiago');
-                """, periodStart, periodEnd, cancellationToken);
-            await ExecuteAsync(connection, transaction, """
-                DELETE FROM movimientos_caja WHERE id_turno IN(
-                    SELECT t.id_turno FROM turnos t
-                     WHERE t.cerrado_en >= (@start::date::timestamp AT TIME ZONE 'America/Santiago')
-                       AND t.cerrado_en < (@end::date::timestamp AT TIME ZONE 'America/Santiago') AND t.estado='cerrado'
-                       AND NOT EXISTS(SELECT 1 FROM pedidos p WHERE p.id_turno=t.id_turno));
-                """, periodStart, periodEnd, cancellationToken);
-            deletedShifts = await ExecuteAsync(connection, transaction, """
-                DELETE FROM turnos t
-                 WHERE t.cerrado_en >= (@start::date::timestamp AT TIME ZONE 'America/Santiago')
-                   AND t.cerrado_en < (@end::date::timestamp AT TIME ZONE 'America/Santiago') AND t.estado='cerrado'
-                   AND NOT EXISTS(SELECT 1 FROM pedidos p WHERE p.id_turno=t.id_turno);
-                """, periodStart, periodEnd, cancellationToken);
-            purgedAt = DateTimeOffset.UtcNow;
-        }
-
         await using (var mark = connection.CreateCommand())
         {
             mark.Transaction = transaction;
             mark.CommandText = """
                 UPDATE archivos_mensuales
                    SET confirmado_en=COALESCE(confirmado_en,NOW()),
-                       confirmado_por=COALESCE(confirmado_por,@user),
-                       mensajes_purgados_en=CASE WHEN @clean_messages THEN COALESCE(mensajes_purgados_en,NOW()) ELSE mensajes_purgados_en END,
-                       purgado_en=CASE WHEN @full_purge THEN COALESCE(purgado_en,NOW()) ELSE purgado_en END
+                       confirmado_por=COALESCE(confirmado_por,@user)
                  WHERE periodo_inicio=@start;
                 """;
             mark.Parameters.AddWithValue("user", userId);
             mark.Parameters.AddWithValue("start", periodStart);
-            mark.Parameters.AddWithValue("clean_messages", messagesEligible);
-            mark.Parameters.AddWithValue("full_purge", fullPurgeEligible);
             await mark.ExecuteNonQueryAsync(cancellationToken);
         }
-        await ExecuteMaintenanceAsync(connection, transaction, cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return new ArchivePurgeResult(
-            periodStart, deletedOrders, deletedShifts, deletedMessages,
-            messagesPurgedAt, purgedAt);
-    }
-
-    private static async Task ExecuteMaintenanceAsync(
-        NpgsqlConnection connection, NpgsqlTransaction transaction, CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            DELETE FROM sesiones_usuario
-             WHERE expira_en < NOW()-INTERVAL '30 days'
-                OR revocada_en < NOW()-INTERVAL '30 days';
-            DELETE FROM eventos_pagos
-             WHERE id_pago IS NULL
-               AND recibido_en < NOW()-INTERVAL '90 days'
-               AND estado_procesamiento='procesado';
-            """;
-        await command.ExecuteNonQueryAsync(cancellationToken);
-    }
-
-    private static async Task EnsurePeriodIsClosedAsync(
-        NpgsqlConnection connection, NpgsqlTransaction transaction,
-        DateOnly periodStart, DateOnly periodEnd, CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = """
-            SELECT EXISTS(SELECT 1 FROM pedidos
-                           WHERE creado_en >= (@start::date::timestamp AT TIME ZONE 'America/Santiago')
-                             AND creado_en < (@end::date::timestamp AT TIME ZONE 'America/Santiago')
-                             AND estado NOT IN('listo','cancelado')),
-                   EXISTS(SELECT 1 FROM turnos
-                           WHERE abierto_en < (@end::date::timestamp AT TIME ZONE 'America/Santiago')
-                             AND (cerrado_en IS NULL OR estado<>'cerrado'));
-            """;
-        AddPeriod(command, periodStart, periodEnd);
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
-        await reader.ReadAsync(cancellationToken);
-        if (reader.GetBoolean(0) || reader.GetBoolean(1))
-            throw new ArgumentException("El período contiene pedidos o turnos todavía activos.");
-    }
-
-    private static async Task ExecuteFullPurgePreparationAsync(
-        NpgsqlConnection connection, NpgsqlTransaction transaction,
-        DateOnly periodStart, DateOnly periodEnd, CancellationToken cancellationToken)
-    {
-        await ExecuteAsync(connection, transaction, """
-            DELETE FROM eventos_pagos WHERE id_pago IN(
-                SELECT pa.id_pago FROM pagos pa JOIN pedidos pe ON pe.id_pedido=pa.id_pedido
-                 WHERE pe.creado_en >= (@start::date::timestamp AT TIME ZONE 'America/Santiago')
-                   AND pe.creado_en < (@end::date::timestamp AT TIME ZONE 'America/Santiago'));
-            """, periodStart, periodEnd, cancellationToken);
-        await ExecuteAsync(connection, transaction, """
-            UPDATE movimiento_puntos SET id_pedido=NULL WHERE id_pedido IN(
-                SELECT id_pedido FROM pedidos WHERE creado_en >= (@start::date::timestamp AT TIME ZONE 'America/Santiago') AND creado_en < (@end::date::timestamp AT TIME ZONE 'America/Santiago'));
-            """, periodStart, periodEnd, cancellationToken);
-        await ExecuteAsync(connection, transaction, """
-            UPDATE mensajes_whatsapp SET id_pedido=NULL WHERE id_pedido IN(
-                SELECT id_pedido FROM pedidos WHERE creado_en >= (@start::date::timestamp AT TIME ZONE 'America/Santiago') AND creado_en < (@end::date::timestamp AT TIME ZONE 'America/Santiago'));
-            """, periodStart, periodEnd, cancellationToken);
-        await ExecuteAsync(connection, transaction, """
-            DELETE FROM historial_estados_pedido WHERE id_pedido IN(
-                SELECT id_pedido FROM pedidos WHERE creado_en >= (@start::date::timestamp AT TIME ZONE 'America/Santiago') AND creado_en < (@end::date::timestamp AT TIME ZONE 'America/Santiago'));
-            """, periodStart, periodEnd, cancellationToken);
-        await ExecuteAsync(connection, transaction, """
-            DELETE FROM pagos WHERE id_pedido IN(
-                SELECT id_pedido FROM pedidos WHERE creado_en >= (@start::date::timestamp AT TIME ZONE 'America/Santiago') AND creado_en < (@end::date::timestamp AT TIME ZONE 'America/Santiago'));
-            """, periodStart, periodEnd, cancellationToken);
+        return new ArchivePurgeResult(periodStart, 0, 0, 0, existingMessagePurge, existingPurge);
     }
 
     private async Task EnsureArchiveCanBeBuiltAsync(DateOnly periodStart, CancellationToken cancellationToken)
@@ -458,14 +331,4 @@ public sealed class PostgresArchiveStore(NpgsqlDataSource dataSource) : IArchive
         command.Parameters.AddWithValue("end", NpgsqlDbType.Date, end);
     }
 
-    private static async Task<int> ExecuteAsync(
-        NpgsqlConnection connection, NpgsqlTransaction transaction, string sql,
-        DateOnly start, DateOnly end, CancellationToken cancellationToken)
-    {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = sql;
-        AddPeriod(command, start, end);
-        return await command.ExecuteNonQueryAsync(cancellationToken);
-    }
 }
