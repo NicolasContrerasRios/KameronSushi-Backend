@@ -8,9 +8,13 @@ namespace KameronSushi.Api.Controllers;
 [ApiController]
 [Authorize(Roles = "administrador")]
 [Route("api/admin")]
-public sealed class AdminController(IAdminStore store, IProductImageStorage productImages) : ControllerBase
+public sealed class AdminController(
+    IAdminStore store,
+    IProductImageStorage productImages,
+    IAdvertisingImageStorage advertisingImages) : ControllerBase
 {
     private const int MaxProductImageBytes = 5 * 1024 * 1024;
+    private const int MaxAdvertisingImageBytes = 10 * 1024 * 1024;
     [HttpGet("categories")]
     public async Task<ActionResult<IReadOnlyList<AdminCategory>>> GetCategories(CancellationToken cancellationToken) =>
         Ok(await store.GetCategoriesAsync(cancellationToken));
@@ -166,6 +170,88 @@ public sealed class AdminController(IAdminStore store, IProductImageStorage prod
         return result is null ? NotFound() : Ok(result);
     }
 
+    [HttpGet("advertising")]
+    public async Task<ActionResult<IReadOnlyList<AdminAdvertisingPanel>>> GetAdvertisingPanels(CancellationToken token) =>
+        Ok(await store.GetAdvertisingPanelsAsync(token));
+
+    [HttpPost("advertising")]
+    public Task<ActionResult<AdminAdvertisingPanel>> CreateAdvertisingPanel(
+        SaveAdminAdvertisingPanel panel, CancellationToken token) =>
+        SaveAdvertisingPanel(null, panel, token);
+
+    [HttpPut("advertising/{panelId:long}")]
+    public Task<ActionResult<AdminAdvertisingPanel>> UpdateAdvertisingPanel(
+        long panelId, SaveAdminAdvertisingPanel panel, CancellationToken token) =>
+        SaveAdvertisingPanel(panelId, panel, token);
+
+    [HttpPost("advertising/{panelId:long}/image")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(MaxAdvertisingImageBytes + 64 * 1024)]
+    public async Task<ActionResult<AdminAdvertisingPanel>> UploadAdvertisingImage(
+        long panelId, IFormFile file, CancellationToken cancellationToken)
+    {
+        if (file is null || file.Length == 0)
+            return Problem(statusCode:400,title:"Imagen inválida",detail:"Selecciona una imagen.");
+        if (file.Length > MaxAdvertisingImageBytes)
+            return Problem(statusCode:400,title:"Imagen demasiado grande",detail:"La imagen no puede superar 10 MB.");
+        if (!(await store.GetAdvertisingPanelsAsync(cancellationToken)).Any(panel => panel.PanelId == panelId))
+            return NotFound();
+
+        await using var memory = new MemoryStream((int)file.Length);
+        await file.CopyToAsync(memory, cancellationToken);
+        if (!IsSupportedImage(memory.GetBuffer().AsSpan(0, (int)memory.Length)))
+            return Problem(statusCode:400,title:"Formato no permitido",detail:"Usa una imagen JPG, PNG o WebP válida.");
+        memory.Position = 0;
+        try
+        {
+            var url = await advertisingImages.UploadAsync(panelId, memory, file.FileName, cancellationToken);
+            var panel = await store.SetAdvertisingPanelImageUrlAsync(panelId, url, cancellationToken);
+            return panel is null ? NotFound() : Ok(panel);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Problem(statusCode:503,title:"No se pudo guardar la imagen",detail:exception.Message);
+        }
+    }
+
+    [HttpDelete("advertising/{panelId:long}/image")]
+    public async Task<ActionResult<AdminAdvertisingPanel>> DeleteAdvertisingImage(
+        long panelId, CancellationToken cancellationToken)
+    {
+        var current = (await store.GetAdvertisingPanelsAsync(cancellationToken))
+            .FirstOrDefault(panel => panel.PanelId == panelId);
+        if (current is null) return NotFound();
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(current.ImageUrl))
+                await advertisingImages.DeleteAsync(panelId, cancellationToken);
+            var panel = await store.SetAdvertisingPanelImageUrlAsync(panelId, null, cancellationToken);
+            return panel is null ? NotFound() : Ok(panel);
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Problem(statusCode:503,title:"No se pudo eliminar la imagen",detail:exception.Message);
+        }
+    }
+
+    [HttpDelete("advertising/{panelId:long}")]
+    public async Task<IActionResult> DeleteAdvertisingPanel(long panelId, CancellationToken cancellationToken)
+    {
+        var current = (await store.GetAdvertisingPanelsAsync(cancellationToken))
+            .FirstOrDefault(panel => panel.PanelId == panelId);
+        if (current is null) return NotFound();
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(current.ImageUrl))
+                await advertisingImages.DeleteAsync(panelId, cancellationToken);
+            return await store.DeleteAdvertisingPanelAsync(panelId, cancellationToken) ? NoContent() : NotFound();
+        }
+        catch (InvalidOperationException exception)
+        {
+            return Problem(statusCode:503,title:"No se pudo eliminar el panel",detail:exception.Message);
+        }
+    }
+
     [HttpGet("customers")]
     public async Task<ActionResult<IReadOnlyList<AdminCustomer>>> GetCustomers([FromQuery]string? search,CancellationToken token)=>Ok(await store.GetCustomersAsync(search,token));
     [HttpGet("customers/{customerId:long}/points")]
@@ -241,6 +327,13 @@ public sealed class AdminController(IAdminStore store, IProductImageStorage prod
     private async Task<ActionResult<AdminPromotion>> SavePromotion(long? id, SaveAdminPromotion promotion, CancellationToken token)
     {
         try { return Ok(await store.SavePromotionAsync(id, promotion, token)); }
+        catch (ArgumentException exception) { return BadRequestProblem(exception); }
+    }
+
+    private async Task<ActionResult<AdminAdvertisingPanel>> SaveAdvertisingPanel(
+        long? id, SaveAdminAdvertisingPanel panel, CancellationToken token)
+    {
+        try { return Ok(await store.SaveAdvertisingPanelAsync(id, panel, token)); }
         catch (ArgumentException exception) { return BadRequestProblem(exception); }
     }
 }

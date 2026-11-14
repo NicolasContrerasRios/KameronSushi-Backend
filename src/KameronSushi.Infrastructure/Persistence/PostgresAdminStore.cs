@@ -253,6 +253,97 @@ public sealed class PostgresAdminStore(NpgsqlDataSource dataSource) : IAdminStor
     private async Task<AdminPromotion?> GetPromotionAsync(long id,CancellationToken token){await using var command=dataSource.CreateCommand("SELECT a.id_promocion,a.id_producto,p.nombre_producto,p.precio,a.precio_oferta,a.vigente_desde,a.vigente_hasta,a.activa FROM promociones_admin a JOIN productos p ON p.id_producto=a.id_producto WHERE a.id_promocion=@id;");command.Parameters.AddWithValue("id",id);await using var reader=await command.ExecuteReaderAsync(token);return await reader.ReadAsync(token)?ReadPromotion(reader):null;}
     private static AdminPromotion ReadPromotion(NpgsqlDataReader reader)=>new(reader.GetInt64(0),reader.GetInt64(1),reader.GetString(2),reader.GetDecimal(3),reader.IsDBNull(4)?null:reader.GetDecimal(4),reader.IsDBNull(5)?null:reader.GetFieldValue<DateTimeOffset>(5),reader.IsDBNull(6)?null:reader.GetFieldValue<DateTimeOffset>(6),reader.GetBoolean(7));
 
+    public async Task<IReadOnlyList<AdminAdvertisingPanel>> GetAdvertisingPanelsAsync(CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand("""
+            SELECT id_panel, titulo, descripcion, imagen_url, duracion_segundos, orden, activa, actualizado_en
+              FROM paneles_publicidad
+             ORDER BY orden, id_panel;
+            """);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var result = new List<AdminAdvertisingPanel>();
+        while (await reader.ReadAsync(cancellationToken)) result.Add(ReadAdvertisingPanel(reader));
+        return result;
+    }
+
+    public async Task<AdminAdvertisingPanel> SaveAdvertisingPanelAsync(
+        long? panelId, SaveAdminAdvertisingPanel panel, CancellationToken cancellationToken)
+    {
+        ValidateAdvertisingPanel(panel);
+        await using var command = dataSource.CreateCommand(panelId is null ? """
+            INSERT INTO paneles_publicidad(titulo, descripcion, duracion_segundos, orden, activa)
+            VALUES(@title, @description, @duration, @order, @active)
+            RETURNING id_panel;
+            """ : """
+            UPDATE paneles_publicidad
+               SET titulo=@title, descripcion=@description, duracion_segundos=@duration,
+                   orden=@order, activa=@active, actualizado_en=NOW()
+             WHERE id_panel=@id
+            RETURNING id_panel;
+            """);
+        command.Parameters.AddWithValue("title", panel.Title.Trim());
+        command.Parameters.Add("description", NpgsqlTypes.NpgsqlDbType.Text).Value =
+            string.IsNullOrWhiteSpace(panel.Description) ? DBNull.Value : panel.Description.Trim();
+        command.Parameters.AddWithValue("duration", panel.DurationSeconds);
+        command.Parameters.AddWithValue("order", panel.Order);
+        command.Parameters.AddWithValue("active", panel.Active);
+        if (panelId is not null) command.Parameters.AddWithValue("id", panelId.Value);
+        var id = Convert.ToInt64(await command.ExecuteScalarAsync(cancellationToken)
+            ?? throw new ArgumentException("El panel de publicidad no existe."));
+        return (await GetAdvertisingPanelAsync(id, cancellationToken))!;
+    }
+
+    public async Task<AdminAdvertisingPanel?> SetAdvertisingPanelImageUrlAsync(
+        long panelId, string? imageUrl, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand("""
+            UPDATE paneles_publicidad
+               SET imagen_url=@image_url, actualizado_en=NOW()
+             WHERE id_panel=@id
+            RETURNING id_panel;
+            """);
+        command.Parameters.Add("image_url", NpgsqlTypes.NpgsqlDbType.Text).Value =
+            string.IsNullOrWhiteSpace(imageUrl) ? DBNull.Value : imageUrl.Trim();
+        command.Parameters.AddWithValue("id", panelId);
+        return await command.ExecuteScalarAsync(cancellationToken) is null
+            ? null
+            : await GetAdvertisingPanelAsync(panelId, cancellationToken);
+    }
+
+    public async Task<bool> DeleteAdvertisingPanelAsync(long panelId, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand(
+            "DELETE FROM paneles_publicidad WHERE id_panel=@id;");
+        command.Parameters.AddWithValue("id", panelId);
+        return await command.ExecuteNonQueryAsync(cancellationToken) > 0;
+    }
+
+    private async Task<AdminAdvertisingPanel?> GetAdvertisingPanelAsync(long panelId, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand("""
+            SELECT id_panel, titulo, descripcion, imagen_url, duracion_segundos, orden, activa, actualizado_en
+              FROM paneles_publicidad
+             WHERE id_panel=@id;
+            """);
+        command.Parameters.AddWithValue("id", panelId);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadAdvertisingPanel(reader) : null;
+    }
+
+    private static AdminAdvertisingPanel ReadAdvertisingPanel(NpgsqlDataReader reader) => new(
+        reader.GetInt64(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2),
+        reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4), reader.GetInt32(5),
+        reader.GetBoolean(6), reader.GetFieldValue<DateTimeOffset>(7));
+
+    private static void ValidateAdvertisingPanel(SaveAdminAdvertisingPanel panel)
+    {
+        if (string.IsNullOrWhiteSpace(panel.Title)) throw new ArgumentException("El título del panel es obligatorio.");
+        if (panel.Title.Trim().Length > 120) throw new ArgumentException("El título no puede superar 120 caracteres.");
+        if (panel.Description?.Trim().Length > 300) throw new ArgumentException("La descripción no puede superar 300 caracteres.");
+        if (panel.DurationSeconds is < 3 or > 120) throw new ArgumentException("La duración debe estar entre 3 y 120 segundos.");
+        if (panel.Order < 0) throw new ArgumentException("El orden no puede ser negativo.");
+    }
+
     public async Task<IReadOnlyList<AdminWrapper>> GetWrappersAsync(CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand("SELECT id_envoltura, nombre, activa FROM envolturas ORDER BY nombre;");

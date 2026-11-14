@@ -34,6 +34,15 @@ public sealed record AdminPromotion(
 public sealed record SaveAdminPromotion(
     long ProductId, decimal OfferPrice, DateTimeOffset? StartsAt, DateTimeOffset? EndsAt,
     bool Active = true);
+
+public sealed record AdminAdvertisingPanel(
+    long PanelId, string Title, string? Description, string? ImageUrl,
+    int DurationSeconds, int Order, bool Active, DateTimeOffset UpdatedAt);
+
+public sealed record SaveAdminAdvertisingPanel(
+    string Title, string? Description, int DurationSeconds = 8,
+    int Order = 0, bool Active = true);
+
 public sealed record AdminCustomer(long CustomerId,string Name,string Phone,string? Email,int Points,int AccumulatedPoints,int RedeemedPoints,string Status);
 public sealed record AdminPointMovement(long MovementId,string Type,int Points,int PreviousBalance,int ResultingBalance,string? Description,DateTimeOffset CreatedAt);
 public sealed record AdjustCustomerPoints(int Points,string Reason);

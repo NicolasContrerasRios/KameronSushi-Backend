@@ -43,6 +43,7 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddSingleton<IGoogleTokenValidator, GoogleTokenValidator>();
         services.AddSingleton<IProductImageStorage, CloudinaryProductImageStorage>();
+        services.AddSingleton<IAdvertisingImageStorage, CloudinaryAdvertisingImageStorage>();
         services.AddSingleton<IPushNotificationService, FirebasePushNotificationService>();
         services.AddSingleton<IWebhookSignatureValidator, MetaWebhookSignatureValidator>();
         services.AddSingleton<TwilioWebhookSignatureValidator>();

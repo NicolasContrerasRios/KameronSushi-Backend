@@ -19,6 +19,10 @@ public interface IAdminStore
     Task<IReadOnlyList<AdminPromotion>> GetPromotionsAsync(CancellationToken cancellationToken);
     Task<AdminPromotion> SavePromotionAsync(long? promotionId, SaveAdminPromotion promotion, CancellationToken cancellationToken);
     Task<AdminPromotion?> DisablePromotionAsync(long promotionId, CancellationToken cancellationToken);
+    Task<IReadOnlyList<AdminAdvertisingPanel>> GetAdvertisingPanelsAsync(CancellationToken cancellationToken);
+    Task<AdminAdvertisingPanel> SaveAdvertisingPanelAsync(long? panelId, SaveAdminAdvertisingPanel panel, CancellationToken cancellationToken);
+    Task<AdminAdvertisingPanel?> SetAdvertisingPanelImageUrlAsync(long panelId, string? imageUrl, CancellationToken cancellationToken);
+    Task<bool> DeleteAdvertisingPanelAsync(long panelId, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminCustomer>> GetCustomersAsync(string? search, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminPointMovement>> GetCustomerPointMovementsAsync(long customerId, CancellationToken cancellationToken);
     Task<AdminCustomer?> AdjustCustomerPointsAsync(long customerId, AdjustCustomerPoints adjustment, CancellationToken cancellationToken);

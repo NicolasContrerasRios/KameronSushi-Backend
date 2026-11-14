@@ -13,3 +13,11 @@ public sealed record CustomerHome(bool IsOpen, CustomerProfile? Customer,
 public sealed record CustomerReward(long RewardProductId, long ProductId, string Name, string? Description,
     int PointsCost, int? Stock, int? LimitPerOrder, bool CanRedeem);
 public sealed record RegisterNotificationDevice(string DeviceToken, string Platform, string? DeviceName);
+public sealed record CustomerOrderSummary(
+    long OrderId,
+    string DeliveryType,
+    string Status,
+    decimal Total,
+    int ItemCount,
+    string PaymentMethod,
+    DateTimeOffset CreatedAt);

@@ -1,4 +1,5 @@
 using KameronSushi.Application.Abstractions;
+using KameronSushi.Application.Customers;
 using KameronSushi.Application.Pos;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -18,6 +19,25 @@ public sealed class CustomerOrderingController(IPosStore store, ICustomerAppStor
     [HttpGet("availability")]
     public async Task<ActionResult<CustomerOrderingAvailability>> GetAvailability(CancellationToken cancellationToken) =>
         Ok(new CustomerOrderingAvailability(await store.GetCurrentShiftAsync(cancellationToken) is not null));
+
+    [HttpGet("orders")]
+    public async Task<ActionResult<IReadOnlyList<CustomerOrderSummary>>> GetOrders(
+        [FromQuery] int limit = 50,
+        CancellationToken cancellationToken = default)
+    {
+        var authorization = Request.Headers.Authorization.ToString();
+        var token = authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+            ? authorization[7..].Trim()
+            : null;
+        if (string.IsNullOrWhiteSpace(token))
+            return Unauthorized();
+
+        var customer = await customerStore.GetSessionCustomerAsync(token, cancellationToken);
+        if (customer is null)
+            return Unauthorized();
+
+        return Ok(await customerStore.GetOrdersAsync(customer.CustomerId, limit, cancellationToken));
+    }
 
     [EnableRateLimiting("customer-orders")]
     [HttpPost("orders")]

@@ -202,7 +202,8 @@ Al iniciar, el backend registra y aplica sus migraciones pendientes en la tabla 
 | `POST` | `/api/pos/orders/{orderId}/cancel` | Cancela un pedido activo con motivo, revierte canjes y cancela sus pagos. |
 | `GET` | `/api/customer/availability` | Indica a la aplicación de clientes si existe un turno abierto. No requiere sesión. |
 | `GET` | `/api/customer/catalog` | Entrega a la aplicación de clientes el catálogo vigente. No requiere sesión. |
-| `POST` | `/api/customer/orders` | Recibe pedidos idempotentes desde Android, valida el catálogo y deja el pago al recibir pendiente. No requiere sesión y tiene límite por IP. |
+| `POST` | `/api/customer/orders` | Recibe pedidos idempotentes de una cuenta autenticada, valida el catálogo y deja el pago al recibir pendiente. Tiene límite por IP. |
+| `GET` | `/api/customer/orders?limit=50` | Devuelve el historial reciente de la cuenta autenticada para restaurar Mis pedidos en Android. |
 | `GET` | `/api/kitchen/orders` | Lista los pedidos en preparación para cocina. |
 | `GET` | `/api/kitchen/orders/performance` | Calcula por tipo de entrega el tiempo promedio hasta quedar listo dentro del turno abierto. |
 | `PATCH` | `/api/kitchen/orders/{orderId}/ready` | Pasa un pedido en preparación a listo, su estado final. |
@@ -284,6 +285,8 @@ Cloudinary__ApiSecret
 ```
 
 El secreto de Cloudinary solo se configura en Render. La aplicación de escritorio envía imágenes JPG, PNG o WebP de hasta 5 MB al endpoint autenticado `POST /api/admin/products/{productId}/image`; el backend las transforma a 1000 x 1000, guarda la URL HTTPS en `productos.imagen_url` y el catálogo la entrega a Android. `DELETE /api/admin/products/{productId}/image` elimina el recurso y limpia la URL. La migración `016_product_images` garantiza que la columna exista.
+
+El módulo **Administración > Publicidad** usa las mismas credenciales de Cloudinary sin secretos adicionales. Los paneles guardan solo título, descripción, orden, duración, estado y URL en PostgreSQL; las imágenes se transforman a 1920 x 1080 y se almacenan bajo `kameron-sushi/advertising/{panelId}`. La migración `019_advertising_panels` crea `paneles_publicidad`. Una imagen puede pesar hasta 10 MB antes de la optimización.
 
 Para Twilio reemplaza las tres credenciales de Meta por `WhatsApp__Provider=Twilio`, `Twilio__AccountSid`, `Twilio__AuthToken` y `Twilio__WhatsAppNumber`.
 

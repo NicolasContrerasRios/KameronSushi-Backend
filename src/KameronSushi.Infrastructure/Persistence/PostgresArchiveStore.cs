@@ -70,7 +70,7 @@ public sealed class PostgresArchiveStore(NpgsqlDataSource dataSource) : IArchive
                 SELECT t.id_turno, t.estado, t.abierto_en, t.cerrado_en, u.nombre,
                        (SELECT COUNT(*)::int FROM pedidos p WHERE p.id_turno=t.id_turno AND p.estado<>'cancelado'),
                        (SELECT COALESCE(SUM(p.total),0) FROM pedidos p WHERE p.id_turno=t.id_turno AND p.estado<>'cancelado'),
-                       t.diferencia_caja
+                       t.diferencia_efectivo
                   FROM turnos t JOIN usuarios u ON u.id_usuario=t.id_usuario_apertura
                  WHERE t.cerrado_en >= (@start::date::timestamp AT TIME ZONE 'America/Santiago')
                    AND t.cerrado_en < (@end::date::timestamp AT TIME ZONE 'America/Santiago')

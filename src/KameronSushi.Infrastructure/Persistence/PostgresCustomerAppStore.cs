@@ -351,6 +351,49 @@ public sealed class PostgresCustomerAppStore(
         return new CustomerHome(isOpen, profile, promotions, rewards);
     }
 
+    public async Task<IReadOnlyList<CustomerOrderSummary>> GetOrdersAsync(
+        long customerId, int limit, CancellationToken cancellationToken)
+    {
+        limit = Math.Clamp(limit, 1, 100);
+        await using var command = dataSource.CreateCommand("""
+            SELECT p.id_pedido,
+                   p.tipo_entrega,
+                   p.estado,
+                   p.total,
+                   COALESCE(SUM(d.cantidad), 0)::INTEGER AS cantidad_items,
+                   COALESCE((
+                       SELECT STRING_AGG(DISTINCT pago.metodo, ' + ' ORDER BY pago.metodo)
+                         FROM pagos pago
+                        WHERE pago.id_pedido = p.id_pedido
+                   ), 'pendiente') AS medio_pago,
+                   p.creado_en
+              FROM pedidos p
+              LEFT JOIN detalle_pedidos d ON d.id_pedido = p.id_pedido
+             WHERE p.id_cliente = @customer
+               AND p.estado <> 'borrador'
+             GROUP BY p.id_pedido
+             ORDER BY p.creado_en DESC, p.id_pedido DESC
+             LIMIT @limit;
+            """);
+        command.Parameters.AddWithValue("customer", customerId);
+        command.Parameters.AddWithValue("limit", limit);
+
+        var orders = new List<CustomerOrderSummary>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            orders.Add(new CustomerOrderSummary(
+                reader.GetInt64(0),
+                reader.GetString(1),
+                reader.GetString(2),
+                reader.GetDecimal(3),
+                reader.GetInt32(4),
+                reader.GetString(5),
+                reader.GetFieldValue<DateTimeOffset>(6)));
+        }
+        return orders;
+    }
+
     public async Task RegisterNotificationDeviceAsync(
         long customerId, RegisterNotificationDevice request, CancellationToken cancellationToken)
     {
