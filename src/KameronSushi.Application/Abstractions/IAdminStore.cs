@@ -26,7 +26,7 @@ public interface IAdminStore
     Task<IReadOnlyList<AdminCustomer>> GetCustomersAsync(string? search, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminPointMovement>> GetCustomerPointMovementsAsync(long customerId, CancellationToken cancellationToken);
     Task<AdminCustomer?> AdjustCustomerPointsAsync(long customerId, AdjustCustomerPoints adjustment, CancellationToken cancellationToken);
-    Task<IReadOnlyList<AdminShiftSummary>> GetShiftsAsync(int limit, CancellationToken cancellationToken);
+    Task<IReadOnlyList<AdminShiftSummary>> GetShiftsAsync(int limit, bool includeTest, CancellationToken cancellationToken);
     Task<AdminKitchenDashboard> GetKitchenDashboardAsync(long? shiftId, CancellationToken cancellationToken);
     Task<int> SaveKitchenTargetAsync(int targetMinutes, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminRewardProduct>> GetRewardsAsync(CancellationToken cancellationToken);

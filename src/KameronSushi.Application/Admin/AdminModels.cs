@@ -46,7 +46,7 @@ public sealed record SaveAdminAdvertisingPanel(
 public sealed record AdminCustomer(long CustomerId,string Name,string Phone,string? Email,int Points,int AccumulatedPoints,int RedeemedPoints,string Status);
 public sealed record AdminPointMovement(long MovementId,string Type,int Points,int PreviousBalance,int ResultingBalance,string? Description,DateTimeOffset CreatedAt);
 public sealed record AdjustCustomerPoints(int Points,string Reason);
-public sealed record AdminShiftSummary(long ShiftId,string Status,DateTimeOffset OpenedAt,DateTimeOffset? ClosedAt,string OpenedByName,int OrderCount,decimal TotalSales,decimal? CashDifference);
+public sealed record AdminShiftSummary(long ShiftId,string Status,DateTimeOffset OpenedAt,DateTimeOffset? ClosedAt,string OpenedByName,int OrderCount,decimal TotalSales,decimal? CashDifference,bool IsTest=false);
 public sealed record AdminKitchenMetric(string DeliveryType,int ActiveOrders,int CompletedOrders,double? AverageMinutes,double? MaximumMinutes,int OverTargetOrders);
 public sealed record AdminKitchenProductMetric(string ProductName,int Orders,double AverageMinutes);
 public sealed record AdminKitchenDashboard(long? ShiftId,int TargetMinutes,IReadOnlyList<AdminKitchenMetric> DeliveryMetrics,IReadOnlyList<AdminKitchenProductMetric> Products);

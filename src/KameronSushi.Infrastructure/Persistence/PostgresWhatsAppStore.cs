@@ -401,7 +401,7 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         const string updateSql = """
             WITH turno_abierto AS MATERIALIZED (
-                SELECT id_turno
+                SELECT id_turno, es_prueba
                 FROM turnos
                 WHERE estado = 'abierto' AND cerrado_en IS NULL
                 ORDER BY abierto_en DESC
@@ -417,7 +417,8 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
             )
             UPDATE pedidos AS p
             SET estado = 'en_preparacion',
-                id_turno = t.id_turno
+                id_turno = t.id_turno,
+                es_prueba = t.es_prueba
             FROM turno_abierto AS t
             WHERE p.id_pedido = (SELECT id_pedido FROM pedido_borrador)
             RETURNING p.id_pedido, p.total;

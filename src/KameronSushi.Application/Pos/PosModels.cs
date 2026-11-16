@@ -182,9 +182,10 @@ public sealed record CashShift(
     DateTimeOffset? ClosedAt,
     long OpenedByUserId,
     string OpenedByName,
-    decimal OpeningAmount);
+    decimal OpeningAmount,
+    bool IsTest);
 
-public sealed record OpenCashShift(decimal OpeningAmount);
+public sealed record OpenCashShift(decimal OpeningAmount, bool IsTest = false);
 public sealed record CloseCashShift(decimal CountedCash, string? Notes);
 public sealed record CreateCashMovement(string Type, decimal Amount, string Reason);
 public sealed record CashMovement(long MovementId, string Type, decimal Amount, string Reason, DateTimeOffset CreatedAt);

@@ -261,8 +261,8 @@ public sealed class AdminController(
     {try{var result=await store.AdjustCustomerPointsAsync(customerId,adjustment,token);return result is null?NotFound():Ok(result);}catch(ArgumentException exception){return BadRequestProblem(exception);}}
 
     [HttpGet("shifts")]
-    public async Task<ActionResult<IReadOnlyList<AdminShiftSummary>>> GetShifts([FromQuery]int limit=100,CancellationToken token=default)
-    {if(limit is<1 or>500)return BadRequest();return Ok(await store.GetShiftsAsync(limit,token));}
+    public async Task<ActionResult<IReadOnlyList<AdminShiftSummary>>> GetShifts([FromQuery]int limit=100,[FromQuery]bool includeTest=false,CancellationToken token=default)
+    {if(limit is<1 or>500)return BadRequest();return Ok(await store.GetShiftsAsync(limit,includeTest,token));}
     [HttpGet("kitchen/dashboard")]
     public async Task<ActionResult<AdminKitchenDashboard>> GetKitchenDashboard([FromQuery]long? shiftId,CancellationToken token)=>Ok(await store.GetKitchenDashboardAsync(shiftId,token));
     [HttpPut("kitchen/target")]

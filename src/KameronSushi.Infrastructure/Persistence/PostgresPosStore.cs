@@ -250,10 +250,11 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             orderCommand.CommandText = """
                 INSERT INTO pedidos
                     (id_cliente, id_turno, estado, subtotal, descuento, tipo_entrega,
-                     canal_origen, costo_envio, id_operacion_cliente, observaciones, telefono_contacto)
+                     canal_origen, costo_envio, id_operacion_cliente, observaciones, telefono_contacto, es_prueba)
                 VALUES
                     (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, @delivery_type,
-                     'web', 0, @client_order_id, 'Pedido creado desde la aplicación Android', @contact_phone)
+                     'web', 0, @client_order_id, 'Pedido creado desde la aplicación Android', @contact_phone,
+                     (SELECT es_prueba FROM turnos WHERE id_turno = @shift_id))
                 RETURNING id_pedido, creado_en;
                 """;
             orderCommand.Parameters.AddWithValue("customer_id", customerId);
@@ -537,10 +538,11 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             orderCommand.CommandText = """
                 INSERT INTO pedidos
                     (id_cliente, id_turno, estado, subtotal, descuento, tipo_entrega, canal_origen,
-                     costo_envio, id_operacion_cliente, telefono_contacto)
+                     costo_envio, id_operacion_cliente, telefono_contacto, es_prueba)
                 VALUES
                     (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, 'retiro', 'local',
-                     0, @client_order_id, @contact_phone)
+                     0, @client_order_id, @contact_phone,
+                     (SELECT es_prueba FROM turnos WHERE id_turno = @shift_id))
                 RETURNING id_pedido, creado_en;
                 """;
             orderCommand.Parameters.AddWithValue("subtotal", subtotal);
@@ -1140,7 +1142,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
     {
         await using var command = dataSource.CreateCommand("""
             SELECT t.id_turno, t.estado, t.abierto_en, t.cerrado_en,
-                   t.id_usuario_apertura, u.nombre, t.monto_inicial
+                   t.id_usuario_apertura, u.nombre, t.monto_inicial, t.es_prueba
               FROM turnos t
               JOIN usuarios u ON u.id_usuario = t.id_usuario_apertura
              WHERE t.estado = 'abierto'
@@ -1150,7 +1152,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         return await reader.ReadAsync(cancellationToken) ? ReadShift(reader) : null;
     }
 
-    public async Task<CashShift> OpenShiftAsync(decimal openingAmount, long userId, CancellationToken cancellationToken)
+    public async Task<CashShift> OpenShiftAsync(decimal openingAmount, bool isTest, long userId, CancellationToken cancellationToken)
     {
         if (openingAmount < 0) throw new ArgumentException("El monto inicial no puede ser negativo.");
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
@@ -1168,18 +1170,19 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         {
             shiftCommand.Transaction = transaction;
             shiftCommand.CommandText = """
-                INSERT INTO turnos (id_usuario_apertura, estado, monto_inicial)
-                SELECT @user_id, 'abierto', @opening_amount
+                INSERT INTO turnos (id_usuario_apertura, estado, monto_inicial, es_prueba)
+                SELECT @user_id, 'abierto', @opening_amount, @is_test
                  WHERE EXISTS(SELECT 1 FROM usuarios WHERE id_usuario=@user_id AND estado='activo')
                 RETURNING id_turno, estado, abierto_en, cerrado_en, id_usuario_apertura, monto_inicial,
-                          (SELECT nombre FROM usuarios WHERE id_usuario=@user_id);
+                          (SELECT nombre FROM usuarios WHERE id_usuario=@user_id), es_prueba;
                 """;
             shiftCommand.Parameters.AddWithValue("user_id", userId);
             shiftCommand.Parameters.AddWithValue("opening_amount", openingAmount);
+            shiftCommand.Parameters.AddWithValue("is_test", isTest);
             await using var reader = await shiftCommand.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken)) throw new ArgumentException("El usuario de caja no está activo.");
             shift = new CashShift(reader.GetInt64(0), reader.GetString(1),
-                reader.GetFieldValue<DateTimeOffset>(2), null, reader.GetInt64(4), reader.GetString(6), reader.GetDecimal(5));
+                reader.GetFieldValue<DateTimeOffset>(2), null, reader.GetInt64(4), reader.GetString(6), reader.GetDecimal(5), reader.GetBoolean(7));
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -1380,7 +1383,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         command.Transaction = transaction;
         command.CommandText = $"""
             SELECT t.id_turno, t.estado, t.abierto_en, t.cerrado_en,
-                   t.id_usuario_apertura, u.nombre, t.monto_inicial
+                   t.id_usuario_apertura, u.nombre, t.monto_inicial, t.es_prueba
               FROM turnos t
               JOIN usuarios u ON u.id_usuario = t.id_usuario_apertura
              WHERE t.estado = 'abierto'
@@ -1393,7 +1396,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
     private static CashShift ReadShift(NpgsqlDataReader reader) => new(
         reader.GetInt64(0), reader.GetString(1), reader.GetFieldValue<DateTimeOffset>(2),
         reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3),
-        reader.GetInt64(4), reader.GetString(5), reader.GetDecimal(6));
+        reader.GetInt64(4), reader.GetString(5), reader.GetDecimal(6), reader.GetBoolean(7));
 
     private static async Task<CashShiftReport?> BuildShiftReportAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, long shiftId,
@@ -1407,7 +1410,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             shiftCommand.Transaction = transaction;
             shiftCommand.CommandText = """
                 SELECT t.id_turno, t.estado, t.abierto_en, t.cerrado_en,
-                       t.id_usuario_apertura, u.nombre, t.monto_inicial,
+                       t.id_usuario_apertura, u.nombre, t.monto_inicial, t.es_prueba,
                        t.efectivo_contado, t.diferencia_efectivo
                   FROM turnos t
                   JOIN usuarios u ON u.id_usuario = t.id_usuario_apertura
@@ -1417,8 +1420,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             await using var reader = await shiftCommand.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken)) return null;
             shift = ReadShift(reader);
-            countedCash = reader.IsDBNull(7) ? null : reader.GetDecimal(7);
-            cashDifference = reader.IsDBNull(8) ? null : reader.GetDecimal(8);
+            countedCash = reader.IsDBNull(8) ? null : reader.GetDecimal(8);
+            cashDifference = reader.IsDBNull(9) ? null : reader.GetDecimal(9);
         }
 
         int orderCount;

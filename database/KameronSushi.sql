@@ -254,6 +254,7 @@ CREATE TABLE pedidos (
     id_cliente                 BIGINT REFERENCES clientes(id_cliente) ON DELETE SET NULL,
     id_conversacion_whatsapp   BIGINT REFERENCES conversaciones_whatsapp(id_conversacion) ON DELETE SET NULL,
     telefono_contacto          VARCHAR(20),
+    es_prueba                  BOOLEAN NOT NULL DEFAULT FALSE,
     estado                     VARCHAR(30) NOT NULL DEFAULT 'borrador',
     subtotal                   NUMERIC(12,0) NOT NULL DEFAULT 0 CHECK (subtotal >= 0),
     descuento                  NUMERIC(12,0) NOT NULL DEFAULT 0 CHECK (descuento >= 0),
@@ -293,6 +294,7 @@ CREATE TABLE pedidos (
 CREATE INDEX ix_pedidos_cliente ON pedidos(id_cliente);
 CREATE INDEX ix_pedidos_conversacion ON pedidos(id_conversacion_whatsapp);
 CREATE INDEX ix_pedidos_estado_creado ON pedidos(estado, creado_en);
+CREATE INDEX ix_pedidos_prueba_creado ON pedidos(es_prueba, creado_en DESC);
 CREATE UNIQUE INDEX ux_pedidos_operacion_cliente
     ON pedidos(id_operacion_cliente)
     WHERE id_operacion_cliente IS NOT NULL;
@@ -600,6 +602,7 @@ CREATE TABLE turnos (
     efectivo_contado     NUMERIC(12,0),
     efectivo_esperado    NUMERIC(12,0),
     diferencia_efectivo  NUMERIC(12,0),
+    es_prueba            BOOLEAN NOT NULL DEFAULT FALSE,
     observaciones        TEXT,
     creado_en            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     actualizado_en       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -626,6 +629,7 @@ CREATE INDEX ix_turnos_usuario_apertura ON turnos(id_usuario_apertura);
 CREATE INDEX ix_turnos_usuario_cierre
     ON turnos(id_usuario_cierre) WHERE id_usuario_cierre IS NOT NULL;
 CREATE INDEX ix_turnos_abierto_en ON turnos(abierto_en DESC);
+CREATE INDEX ix_turnos_prueba_abierto ON turnos(es_prueba, abierto_en DESC);
 
 CREATE TABLE movimientos_caja (
     id_movimiento  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

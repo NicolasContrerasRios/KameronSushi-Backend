@@ -24,7 +24,7 @@ public sealed class PosController(IPosStore store, IPushNotificationService noti
         try
         {
             var wasAlreadyOpen = await store.GetCurrentShiftAsync(cancellationToken) is not null;
-            var shift = await store.OpenShiftAsync(request.OpeningAmount, GetUserId(), cancellationToken);
+            var shift = await store.OpenShiftAsync(request.OpeningAmount, request.IsTest, GetUserId(), cancellationToken);
             if (!wasAlreadyOpen) await notifications.NotifyLocalOpenedAsync(cancellationToken);
             return Ok(shift);
         }

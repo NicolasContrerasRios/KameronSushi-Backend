@@ -172,16 +172,17 @@ public sealed class PostgresAdminStore(NpgsqlDataSource dataSource) : IAdminStor
     }
     private static AdminCustomer ReadCustomer(NpgsqlDataReader reader)=>new(reader.GetInt64(0),reader.GetString(1),reader.GetString(2),reader.IsDBNull(3)?null:reader.GetString(3),reader.GetInt32(4),reader.GetInt32(5),reader.GetInt32(6),reader.GetString(7));
 
-    public async Task<IReadOnlyList<AdminShiftSummary>> GetShiftsAsync(int limit,CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<AdminShiftSummary>> GetShiftsAsync(int limit,bool includeTest,CancellationToken cancellationToken)
     {
         await using var command=dataSource.CreateCommand("""
             SELECT t.id_turno,t.estado,t.abierto_en,t.cerrado_en,u.nombre,
                    (SELECT COUNT(*) FROM pedidos p WHERE p.id_turno=t.id_turno AND p.estado<>'cancelado'),
                    (SELECT COALESCE(SUM(p.total),0) FROM pedidos p WHERE p.id_turno=t.id_turno AND p.estado<>'cancelado'),
-                   t.diferencia_efectivo
+                   t.diferencia_efectivo,t.es_prueba
               FROM turnos t JOIN usuarios u ON u.id_usuario=t.id_usuario_apertura
+             WHERE (@include_test OR NOT t.es_prueba)
              ORDER BY t.abierto_en DESC LIMIT @limit;
-            """);command.Parameters.AddWithValue("limit",limit);await using var reader=await command.ExecuteReaderAsync(cancellationToken);var result=new List<AdminShiftSummary>();while(await reader.ReadAsync(cancellationToken))result.Add(new(reader.GetInt64(0),reader.GetString(1),reader.GetFieldValue<DateTimeOffset>(2),reader.IsDBNull(3)?null:reader.GetFieldValue<DateTimeOffset>(3),reader.GetString(4),Convert.ToInt32(reader.GetInt64(5)),reader.GetDecimal(6),reader.IsDBNull(7)?null:reader.GetDecimal(7)));return result;
+            """);command.Parameters.AddWithValue("limit",limit);command.Parameters.AddWithValue("include_test",includeTest);await using var reader=await command.ExecuteReaderAsync(cancellationToken);var result=new List<AdminShiftSummary>();while(await reader.ReadAsync(cancellationToken))result.Add(new(reader.GetInt64(0),reader.GetString(1),reader.GetFieldValue<DateTimeOffset>(2),reader.IsDBNull(3)?null:reader.GetFieldValue<DateTimeOffset>(3),reader.GetString(4),Convert.ToInt32(reader.GetInt64(5)),reader.GetDecimal(6),reader.IsDBNull(7)?null:reader.GetDecimal(7),reader.GetBoolean(8)));return result;
     }
 
     public async Task<AdminKitchenDashboard> GetKitchenDashboardAsync(long? shiftId,CancellationToken cancellationToken)

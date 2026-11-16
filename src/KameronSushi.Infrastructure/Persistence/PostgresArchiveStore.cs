@@ -70,7 +70,7 @@ public sealed class PostgresArchiveStore(NpgsqlDataSource dataSource) : IArchive
                 SELECT t.id_turno, t.estado, t.abierto_en, t.cerrado_en, u.nombre,
                        (SELECT COUNT(*)::int FROM pedidos p WHERE p.id_turno=t.id_turno AND p.estado<>'cancelado'),
                        (SELECT COALESCE(SUM(p.total),0) FROM pedidos p WHERE p.id_turno=t.id_turno AND p.estado<>'cancelado'),
-                       t.diferencia_efectivo
+                       t.diferencia_efectivo, t.es_prueba
                   FROM turnos t JOIN usuarios u ON u.id_usuario=t.id_usuario_apertura
                  WHERE t.cerrado_en >= (@start::date::timestamp AT TIME ZONE 'America/Santiago')
                    AND t.cerrado_en < (@end::date::timestamp AT TIME ZONE 'America/Santiago')
@@ -83,7 +83,8 @@ public sealed class PostgresArchiveStore(NpgsqlDataSource dataSource) : IArchive
                 var summary = new AdminShiftSummary(
                     reader.GetInt64(0), reader.GetString(1), reader.GetFieldValue<DateTimeOffset>(2),
                     reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3), reader.GetString(4),
-                    reader.GetInt32(5), reader.GetDecimal(6), reader.IsDBNull(7) ? null : reader.GetDecimal(7));
+                    reader.GetInt32(5), reader.GetDecimal(6), reader.IsDBNull(7) ? null : reader.GetDecimal(7),
+                    reader.GetBoolean(8));
                 var report = await posStore.GetShiftReportAsync(summary.ShiftId, cancellationToken)
                     ?? throw new InvalidOperationException($"No se pudo construir el turno {summary.ShiftId}.");
                 shifts.Add(new ArchivedShift(summary, report));
