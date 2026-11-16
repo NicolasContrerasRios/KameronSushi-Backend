@@ -44,7 +44,8 @@ public sealed record CreateLocalOrder(
     long? CustomerId = null,
     IReadOnlyList<CreateRewardItem>? Rewards = null,
     Guid? ClientOrderId = null,
-    bool IsOfflineSale = false);
+    bool IsOfflineSale = false,
+    string? ContactPhone = null);
 
 public sealed record CancelOrder(string Reason);
 
@@ -123,6 +124,7 @@ public sealed record PosOrderDetails(
     string? Notes,
     string? CustomerName,
     string? CustomerPhone,
+    string? ContactPhone,
     DateTimeOffset CreatedAt,
     IReadOnlyList<PosOrderItem> Items,
     IReadOnlyList<PosOrderPayment> Payments);

@@ -253,6 +253,7 @@ CREATE TABLE pedidos (
     id_turno                   BIGINT,
     id_cliente                 BIGINT REFERENCES clientes(id_cliente) ON DELETE SET NULL,
     id_conversacion_whatsapp   BIGINT REFERENCES conversaciones_whatsapp(id_conversacion) ON DELETE SET NULL,
+    telefono_contacto          VARCHAR(20),
     estado                     VARCHAR(30) NOT NULL DEFAULT 'borrador',
     subtotal                   NUMERIC(12,0) NOT NULL DEFAULT 0 CHECK (subtotal >= 0),
     descuento                  NUMERIC(12,0) NOT NULL DEFAULT 0 CHECK (descuento >= 0),
@@ -282,6 +283,9 @@ CREATE TABLE pedidos (
     CONSTRAINT ck_pedido_canal CHECK (canal_origen IN ('web', 'whatsapp', 'local', 'telefono')),
     CONSTRAINT ck_pedido_descuento CHECK (descuento <= subtotal),
     CONSTRAINT ck_pedido_intentos_impresion CHECK (intentos_impresion >= 0),
+    CONSTRAINT ck_pedido_telefono_contacto CHECK (
+        telefono_contacto IS NULL OR BTRIM(telefono_contacto) <> ''
+    ),
     CONSTRAINT ck_pedido_retiro_sin_envio
         CHECK (tipo_entrega <> 'retiro' OR costo_envio = 0)
 );

@@ -250,10 +250,10 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             orderCommand.CommandText = """
                 INSERT INTO pedidos
                     (id_cliente, id_turno, estado, subtotal, descuento, tipo_entrega,
-                     canal_origen, costo_envio, id_operacion_cliente, observaciones)
+                     canal_origen, costo_envio, id_operacion_cliente, observaciones, telefono_contacto)
                 VALUES
                     (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, @delivery_type,
-                     'web', 0, @client_order_id, 'Pedido creado desde la aplicación Android')
+                     'web', 0, @client_order_id, 'Pedido creado desde la aplicación Android', @contact_phone)
                 RETURNING id_pedido, creado_en;
                 """;
             orderCommand.Parameters.AddWithValue("customer_id", customerId);
@@ -261,6 +261,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             orderCommand.Parameters.AddWithValue("subtotal", subtotal);
             orderCommand.Parameters.AddWithValue("delivery_type", deliveryType);
             orderCommand.Parameters.AddWithValue("client_order_id", command.ClientOrderId);
+            orderCommand.Parameters.AddWithValue("contact_phone", NormalizeOptionalContactPhone(customerPhone)!);
             await using var reader = await orderCommand.ExecuteReaderAsync(cancellationToken);
             await reader.ReadAsync(cancellationToken);
             orderId = reader.GetInt64(0);
@@ -465,6 +466,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             throw new ArgumentException("Los canjes de puntos no se pueden registrar offline.");
         if (command.IsOfflineSale && purchaseItems.Any(item => item.UnitPrice is null or < 0 or > 10_000_000))
             throw new ArgumentException("Cada producto de una venta offline debe incluir un precio válido.");
+        var contactPhone = NormalizeOptionalContactPhone(command.ContactPhone);
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
@@ -535,10 +537,10 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             orderCommand.CommandText = """
                 INSERT INTO pedidos
                     (id_cliente, id_turno, estado, subtotal, descuento, tipo_entrega, canal_origen,
-                     costo_envio, id_operacion_cliente)
+                     costo_envio, id_operacion_cliente, telefono_contacto)
                 VALUES
                     (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, 'retiro', 'local',
-                     0, @client_order_id)
+                     0, @client_order_id, @contact_phone)
                 RETURNING id_pedido, creado_en;
                 """;
             orderCommand.Parameters.AddWithValue("subtotal", subtotal);
@@ -546,6 +548,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             orderCommand.Parameters.Add("customer_id", NpgsqlDbType.Bigint).Value = (object?)command.CustomerId ?? DBNull.Value;
             orderCommand.Parameters.Add("client_order_id", NpgsqlDbType.Uuid).Value =
                 (object?)command.ClientOrderId ?? DBNull.Value;
+            orderCommand.Parameters.Add("contact_phone", NpgsqlDbType.Varchar).Value =
+                (object?)contactPhone ?? DBNull.Value;
             await using var reader = await orderCommand.ExecuteReaderAsync(cancellationToken);
             await reader.ReadAsync(cancellationToken);
             orderId = reader.GetInt64(0);
@@ -738,7 +742,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             command.CommandText = """
                 SELECT p.id_pedido, p.estado, p.tipo_entrega, p.canal_origen,
                        p.subtotal, p.descuento, p.costo_envio, p.total, p.observaciones,
-                       c.nombre, c.telefono, p.creado_en
+                       c.nombre, c.telefono, p.telefono_contacto, p.creado_en
                   FROM pedidos p
                   LEFT JOIN clientes c ON c.id_cliente = p.id_cliente
                  WHERE p.id_pedido = @order_id;
@@ -752,7 +756,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                 reader.IsDBNull(8) ? null : reader.GetString(8),
                 reader.IsDBNull(9) ? null : reader.GetString(9),
                 reader.IsDBNull(10) ? null : reader.GetString(10),
-                reader.GetFieldValue<DateTimeOffset>(11));
+                reader.IsDBNull(11) ? null : reader.GetString(11),
+                reader.GetFieldValue<DateTimeOffset>(12));
         }
 
         var items = new List<PosOrderItem>();
@@ -798,7 +803,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         return new PosOrderDetails(
             header.Id, header.Status, header.DeliveryType, header.Channel,
             header.Subtotal, header.Discount, header.ShippingCost, header.Total,
-            header.Notes, header.CustomerName, header.CustomerPhone, header.CreatedAt,
+            header.Notes, header.CustomerName, header.CustomerPhone, header.ContactPhone, header.CreatedAt,
             items, payments);
     }
 
@@ -1707,6 +1712,15 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         list.Add(item);
     }
 
+    private static string? NormalizeOptionalContactPhone(string? phone)
+    {
+        if (string.IsNullOrWhiteSpace(phone)) return null;
+        var digits = new string(phone.Where(char.IsDigit).ToArray());
+        if (digits.Length is < 8 or > 15)
+            throw new ArgumentException("El teléfono de contacto debe contener entre 8 y 15 dígitos.");
+        return digits.Length == 9 && digits.StartsWith('9') ? $"56{digits}" : digits;
+    }
+
     private sealed class ProductBuilder(long id, string name, string category, string? description, decimal price, decimal? originalPrice, string? imageUrl, bool available, bool requiresConfiguration)
     {
         public long Id { get; } = id;
@@ -1743,5 +1757,6 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
     private sealed record PosOrderHeader(
         long Id, string Status, string DeliveryType, string Channel,
         decimal Subtotal, decimal Discount, decimal ShippingCost, decimal Total,
-        string? Notes, string? CustomerName, string? CustomerPhone, DateTimeOffset CreatedAt);
+        string? Notes, string? CustomerName, string? CustomerPhone, string? ContactPhone,
+        DateTimeOffset CreatedAt);
 }
