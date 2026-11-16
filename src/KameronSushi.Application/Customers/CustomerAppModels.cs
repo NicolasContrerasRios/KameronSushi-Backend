@@ -20,4 +20,5 @@ public sealed record CustomerOrderSummary(
     decimal Total,
     int ItemCount,
     string PaymentMethod,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    int? OrderNumber = null);

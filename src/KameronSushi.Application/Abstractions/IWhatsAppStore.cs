@@ -19,7 +19,7 @@ public interface IWhatsAppStore
     Task<IReadOnlyList<Sauce>> GetSaucesAsync(CancellationToken cancellationToken);
     Task<CartSummary> AddToCartAsync(long conversationId, IncomingWhatsAppMessage customer, IReadOnlyDictionary<string, string> context, int quantity, CancellationToken cancellationToken);
     Task<CartSummary?> GetCartAsync(long conversationId, CancellationToken cancellationToken);
-    Task<long?> ConfirmCashOrderAsync(long conversationId, CancellationToken cancellationToken);
+    Task<ConfirmedWhatsAppOrder?> ConfirmCashOrderAsync(long conversationId, CancellationToken cancellationToken);
     Task RecordOutgoingAsync(long conversationId, string? providerMessageId, string type, string content, bool sent, string? error, CancellationToken cancellationToken);
     Task UpdateMessageStatusAsync(string providerMessageId, string status, DateTimeOffset occurredAt, CancellationToken cancellationToken);
 }

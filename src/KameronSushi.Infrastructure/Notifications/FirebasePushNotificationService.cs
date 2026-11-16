@@ -38,7 +38,7 @@ public sealed class FirebasePushNotificationService(
         {
             var target = await GetOrderTargetAsync(orderId, cancellationToken);
             if (target is null || !target.DeliveryType.Equals("retiro", StringComparison.OrdinalIgnoreCase)) return;
-            await SendAsync(target.Tokens, $"Pedido #{orderId} listo",
+            await SendAsync(target.Tokens, $"Pedido #{target.OrderNumber} listo",
                 "Tu pedido está listo para retirar en Kameron Sushi.",
                 "pedido_listo", orderId, cancellationToken);
         });
@@ -50,7 +50,7 @@ public sealed class FirebasePushNotificationService(
         {
             var target = await GetOrderTargetAsync(orderId, cancellationToken);
             if (target is null || !target.DeliveryType.Equals("delivery", StringComparison.OrdinalIgnoreCase)) return;
-            await SendAsync(target.Tokens, $"Pedido #{orderId} en reparto",
+            await SendAsync(target.Tokens, $"Pedido #{target.OrderNumber} en reparto",
                 "Tu pedido salió del local y va en camino a tu dirección.",
                 "pedido_en_reparto", orderId, cancellationToken);
         });
@@ -179,14 +179,16 @@ public sealed class FirebasePushNotificationService(
 
     private async Task<OrderTarget?> GetOrderTargetAsync(long orderId, CancellationToken cancellationToken)
     {
-        await using var command = dataSource.CreateCommand("SELECT id_cliente,tipo_entrega FROM pedidos WHERE id_pedido=@id;");
+        await using var command = dataSource.CreateCommand(
+            "SELECT id_cliente,tipo_entrega,COALESCE(numero_turno,id_pedido::INTEGER) FROM pedidos WHERE id_pedido=@id;");
         command.Parameters.AddWithValue("id", orderId);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         if (!await reader.ReadAsync(cancellationToken) || reader.IsDBNull(0)) return null;
         var customerId = reader.GetInt64(0);
         var deliveryType = reader.GetString(1);
+        var orderNumber = reader.GetInt32(2);
         await reader.DisposeAsync();
-        return new OrderTarget(deliveryType, await GetTokensAsync(customerId, cancellationToken));
+        return new OrderTarget(deliveryType, orderNumber, await GetTokensAsync(customerId, cancellationToken));
     }
 
     private async Task DeactivateTokensAsync(IReadOnlyCollection<string> tokens, CancellationToken cancellationToken)
@@ -199,5 +201,5 @@ public sealed class FirebasePushNotificationService(
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private sealed record OrderTarget(string DeliveryType, IReadOnlyList<string> Tokens);
+    private sealed record OrderTarget(string DeliveryType, int OrderNumber, IReadOnlyList<string> Tokens);
 }

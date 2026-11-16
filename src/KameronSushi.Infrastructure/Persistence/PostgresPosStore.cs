@@ -243,6 +243,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         }
 
         long orderId;
+        int orderNumber;
         DateTimeOffset createdAt;
         await using (var orderCommand = connection.CreateCommand())
         {
@@ -255,7 +256,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                     (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, @delivery_type,
                      'web', 0, @client_order_id, 'Pedido creado desde la aplicación Android', @contact_phone,
                      (SELECT es_prueba FROM turnos WHERE id_turno = @shift_id))
-                RETURNING id_pedido, creado_en;
+                RETURNING id_pedido, numero_turno, creado_en;
                 """;
             orderCommand.Parameters.AddWithValue("customer_id", customerId);
             orderCommand.Parameters.AddWithValue("shift_id", shiftId);
@@ -266,7 +267,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             await using var reader = await orderCommand.ExecuteReaderAsync(cancellationToken);
             await reader.ReadAsync(cancellationToken);
             orderId = reader.GetInt64(0);
-            createdAt = reader.GetFieldValue<DateTimeOffset>(1);
+            orderNumber = reader.GetInt32(1);
+            createdAt = reader.GetFieldValue<DateTimeOffset>(2);
         }
 
         if (delivery is not null)
@@ -379,7 +381,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         }
 
         await transaction.CommitAsync(cancellationToken);
-        return new CreatedOrder(orderId, subtotal, 0, 0, createdAt, remainingPoints);
+        return new CreatedOrder(orderId, subtotal, 0, 0, createdAt, remainingPoints, orderNumber);
     }
 
     public async Task<CustomerLoyalty?> GetCustomerLoyaltyByPhoneAsync(string phone, CancellationToken cancellationToken)
@@ -531,6 +533,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         }
 
         long orderId;
+        int orderNumber;
         DateTimeOffset createdAt;
         await using (var orderCommand = connection.CreateCommand())
         {
@@ -543,7 +546,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                     (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, 'retiro', 'local',
                      0, @client_order_id, @contact_phone,
                      (SELECT es_prueba FROM turnos WHERE id_turno = @shift_id))
-                RETURNING id_pedido, creado_en;
+                RETURNING id_pedido, numero_turno, creado_en;
                 """;
             orderCommand.Parameters.AddWithValue("subtotal", subtotal);
             orderCommand.Parameters.AddWithValue("shift_id", shiftId);
@@ -555,7 +558,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             await using var reader = await orderCommand.ExecuteReaderAsync(cancellationToken);
             await reader.ReadAsync(cancellationToken);
             orderId = reader.GetInt64(0);
-            createdAt = reader.GetFieldValue<DateTimeOffset>(1);
+            orderNumber = reader.GetInt32(1);
+            createdAt = reader.GetFieldValue<DateTimeOffset>(2);
         }
 
         foreach (var item in validatedItems)
@@ -673,7 +677,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         }
 
         await transaction.CommitAsync(cancellationToken);
-        return new CreatedOrder(orderId, subtotal, paid, Math.Max(paid - subtotal, 0), createdAt, remainingPoints);
+        return new CreatedOrder(orderId, subtotal, paid, Math.Max(paid - subtotal, 0), createdAt, remainingPoints, orderNumber);
     }
 
     private static async Task<CreatedOrder?> GetCreatedOrderByClientIdAsync(
@@ -687,7 +691,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         command.CommandText = """
             SELECT p.id_pedido, p.total,
                    COALESCE(SUM(pg.monto) FILTER (WHERE pg.estado = 'aprobado'), 0) AS pagado,
-                   p.creado_en, cf.saldo_puntos
+                   p.creado_en, cf.saldo_puntos, p.numero_turno
               FROM pedidos p
               LEFT JOIN pagos pg ON pg.id_pedido = p.id_pedido
               LEFT JOIN cuentas_fidelizacion cf ON cf.id_cliente = p.id_cliente
@@ -701,7 +705,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         var paid = reader.GetDecimal(2);
         return new CreatedOrder(
             reader.GetInt64(0), total, paid, Math.Max(paid - total, 0),
-            reader.GetFieldValue<DateTimeOffset>(3), reader.IsDBNull(4) ? null : reader.GetInt32(4));
+            reader.GetFieldValue<DateTimeOffset>(3), reader.IsDBNull(4) ? null : reader.GetInt32(4),
+            reader.IsDBNull(5) ? null : reader.GetInt32(5));
     }
 
     public async Task<IReadOnlyList<PosOrderSummary>> GetOrdersAsync(
@@ -712,7 +717,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         await using var command = dataSource.CreateCommand("""
             SELECT p.id_pedido, p.estado, p.tipo_entrega, p.canal_origen, p.total,
                    COALESCE(SUM(d.cantidad), 0)::integer AS cantidad_items,
-                   c.nombre, p.creado_en
+                   c.nombre, p.creado_en, p.numero_turno
               FROM pedidos p
               LEFT JOIN clientes c ON c.id_cliente = p.id_cliente
               LEFT JOIN detalle_pedidos d ON d.id_pedido = p.id_pedido
@@ -730,7 +735,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             orders.Add(new PosOrderSummary(
                 reader.GetInt64(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
                 reader.GetDecimal(4), reader.GetInt32(5), reader.IsDBNull(6) ? null : reader.GetString(6),
-                reader.GetFieldValue<DateTimeOffset>(7)));
+                reader.GetFieldValue<DateTimeOffset>(7), reader.IsDBNull(8) ? null : reader.GetInt32(8)));
         }
         return orders;
     }
@@ -744,7 +749,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             command.CommandText = """
                 SELECT p.id_pedido, p.estado, p.tipo_entrega, p.canal_origen,
                        p.subtotal, p.descuento, p.costo_envio, p.total, p.observaciones,
-                       c.nombre, c.telefono, p.telefono_contacto, p.creado_en
+                       c.nombre, c.telefono, p.telefono_contacto, p.creado_en, p.numero_turno
                   FROM pedidos p
                   LEFT JOIN clientes c ON c.id_cliente = p.id_cliente
                  WHERE p.id_pedido = @order_id;
@@ -759,7 +764,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                 reader.IsDBNull(9) ? null : reader.GetString(9),
                 reader.IsDBNull(10) ? null : reader.GetString(10),
                 reader.IsDBNull(11) ? null : reader.GetString(11),
-                reader.GetFieldValue<DateTimeOffset>(12));
+                reader.GetFieldValue<DateTimeOffset>(12),
+                reader.IsDBNull(13) ? null : reader.GetInt32(13));
         }
 
         var items = new List<PosOrderItem>();
@@ -806,7 +812,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             header.Id, header.Status, header.DeliveryType, header.Channel,
             header.Subtotal, header.Discount, header.ShippingCost, header.Total,
             header.Notes, header.CustomerName, header.CustomerPhone, header.ContactPhone, header.CreatedAt,
-            items, payments);
+            items, payments, header.OrderNumber);
     }
 
     public async Task<IReadOnlyList<OrderStateChange>> GetOrderHistoryAsync(long orderId, CancellationToken cancellationToken)
@@ -919,7 +925,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         await using var command = dataSource.CreateCommand("""
             SELECT p.id_pedido, p.estado, p.tipo_entrega,
                    COALESCE(cocina.iniciado_en, p.creado_en) AS iniciado_en,
-                   d.cantidad, d.nombre_producto, d.observaciones
+                   d.cantidad, d.nombre_producto, d.observaciones, p.numero_turno
               FROM pedidos p
               JOIN detalle_pedidos d ON d.id_pedido = p.id_pedido
               LEFT JOIN LATERAL (
@@ -938,7 +944,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             var orderId = reader.GetInt64(0);
             if (!orders.TryGetValue(orderId, out var order))
             {
-                order = new KitchenBuilder(orderId, reader.GetString(1), reader.GetString(2), reader.GetFieldValue<DateTimeOffset>(3));
+                order = new KitchenBuilder(orderId, reader.GetString(1), reader.GetString(2),
+                    reader.GetFieldValue<DateTimeOffset>(3), reader.IsDBNull(7) ? null : reader.GetInt32(7));
                 orders.Add(orderId, order);
             }
 
@@ -949,7 +956,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             order.Products.Add(quantity == 1 ? text : $"{quantity} × {text}");
         }
 
-        return orders.Values.Select(order => new KitchenOrderSummary(order.Id, order.Status, order.DeliveryType, order.CreatedAt, order.Products)).ToList();
+        return orders.Values.Select(order => new KitchenOrderSummary(
+            order.Id, order.Status, order.DeliveryType, order.CreatedAt, order.Products, order.OrderNumber)).ToList();
     }
 
     public async Task<IReadOnlyList<KitchenPerformanceSummary>> GetKitchenPerformanceAsync(CancellationToken cancellationToken)
@@ -1003,7 +1011,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                        CASE WHEN e.id_entrega IS NULL THEN NULL ELSE
                            CONCAT_WS(', ', CONCAT_WS(' ', e.calle, e.numero),
                                NULLIF(e.departamento, ''), e.comuna, NULLIF(e.referencia, ''))
-                       END
+                       END,
+                       p.numero_turno
                   FROM pedidos p
                   LEFT JOIN clientes c ON c.id_cliente = p.id_cliente
                   LEFT JOIN entregas_pedido e ON e.id_pedido = p.id_pedido
@@ -1030,7 +1039,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                     reader.GetFieldValue<DateTimeOffset>(3),
                     reader.IsDBNull(4) ? null : reader.GetString(4),
                     reader.IsDBNull(5) ? null : reader.GetString(5),
-                    reader.IsDBNull(6) ? null : reader.GetString(6));
+                    reader.IsDBNull(6) ? null : reader.GetString(6),
+                    reader.IsDBNull(7) ? null : reader.GetInt32(7));
             }
         }
 
@@ -1081,7 +1091,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         await transaction.CommitAsync(cancellationToken);
         return new KitchenPrintJob(
             claimToken, header.OrderId, header.DeliveryType, header.Channel, header.CreatedAt,
-            header.CustomerName, header.CustomerPhone, header.DeliveryAddress, items);
+            header.CustomerName, header.CustomerPhone, header.DeliveryAddress, items, header.OrderNumber);
     }
 
     public async Task<bool> CompleteKitchenPrintJobAsync(
@@ -1482,13 +1492,15 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         {
             ordersCommand.Transaction = transaction;
             ordersCommand.CommandText = """
-                SELECT id_pedido, tipo_entrega, COALESCE(total, 0), creado_en
+                SELECT id_pedido, tipo_entrega, COALESCE(total, 0), creado_en, numero_turno
                   FROM pedidos WHERE id_turno = @shift_id AND estado <> 'cancelado' ORDER BY creado_en;
                 """;
             ordersCommand.Parameters.AddWithValue("shift_id", shiftId);
             await using var reader = await ordersCommand.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
-                orders.Add(new ShiftOrderReport(reader.GetInt64(0), reader.GetString(1), reader.GetDecimal(2), reader.GetFieldValue<DateTimeOffset>(3)));
+                orders.Add(new ShiftOrderReport(
+                    reader.GetInt64(0), reader.GetString(1), reader.GetDecimal(2),
+                    reader.GetFieldValue<DateTimeOffset>(3), reader.IsDBNull(4) ? null : reader.GetInt32(4)));
         }
 
         var income = movements.Where(item => item.Type == "ingreso").Sum(item => item.Amount);
@@ -1747,7 +1759,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         long ProductId, string Name, int Quantity, decimal UnitPrice, bool RequiresConfiguration,
         long? OptionId, long? ProductWrapperId, long? SauceId, short? OptionNumber,
         string? Ingredients, string? WrapperName, string? SauceName, string? Details = null);
-    private sealed record KitchenBuilder(long Id, string Status, string DeliveryType, DateTimeOffset CreatedAt)
+    private sealed record KitchenBuilder(
+        long Id, string Status, string DeliveryType, DateTimeOffset CreatedAt, int? OrderNumber)
     {
         public List<string> Products { get; } = [];
     }
@@ -1756,10 +1769,10 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
     private sealed record ValidatedReward(long RewardProductId, long ProductId, string Name, int PointsCost, int Quantity);
     private sealed record PrintJobHeader(
         long OrderId, string DeliveryType, string Channel, DateTimeOffset CreatedAt,
-        string? CustomerName, string? CustomerPhone, string? DeliveryAddress);
+        string? CustomerName, string? CustomerPhone, string? DeliveryAddress, int? OrderNumber);
     private sealed record PosOrderHeader(
         long Id, string Status, string DeliveryType, string Channel,
         decimal Subtotal, decimal Discount, decimal ShippingCost, decimal Total,
         string? Notes, string? CustomerName, string? CustomerPhone, string? ContactPhone,
-        DateTimeOffset CreatedAt);
+        DateTimeOffset CreatedAt, int? OrderNumber);
 }

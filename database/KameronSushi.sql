@@ -251,6 +251,7 @@ CREATE TABLE pedidos (
     id_pedido                  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     id_operacion_cliente       UUID,
     id_turno                   BIGINT,
+    numero_turno               INTEGER,
     id_cliente                 BIGINT REFERENCES clientes(id_cliente) ON DELETE SET NULL,
     id_conversacion_whatsapp   BIGINT REFERENCES conversaciones_whatsapp(id_conversacion) ON DELETE SET NULL,
     telefono_contacto          VARCHAR(20),
@@ -287,6 +288,7 @@ CREATE TABLE pedidos (
     CONSTRAINT ck_pedido_telefono_contacto CHECK (
         telefono_contacto IS NULL OR BTRIM(telefono_contacto) <> ''
     ),
+    CONSTRAINT ck_pedido_numero_turno CHECK (numero_turno IS NULL OR numero_turno > 0),
     CONSTRAINT ck_pedido_retiro_sin_envio
         CHECK (tipo_entrega <> 'retiro' OR costo_envio = 0)
 );
@@ -295,6 +297,9 @@ CREATE INDEX ix_pedidos_cliente ON pedidos(id_cliente);
 CREATE INDEX ix_pedidos_conversacion ON pedidos(id_conversacion_whatsapp);
 CREATE INDEX ix_pedidos_estado_creado ON pedidos(estado, creado_en);
 CREATE INDEX ix_pedidos_prueba_creado ON pedidos(es_prueba, creado_en DESC);
+CREATE UNIQUE INDEX uq_pedido_numero_por_turno
+    ON pedidos(id_turno, numero_turno)
+    WHERE id_turno IS NOT NULL AND numero_turno IS NOT NULL;
 CREATE UNIQUE INDEX ux_pedidos_operacion_cliente
     ON pedidos(id_operacion_cliente)
     WHERE id_operacion_cliente IS NOT NULL;
@@ -651,6 +656,24 @@ ALTER TABLE pedidos
     FOREIGN KEY (id_turno) REFERENCES turnos(id_turno) ON DELETE RESTRICT;
 
 CREATE INDEX ix_pedidos_turno ON pedidos(id_turno) WHERE id_turno IS NOT NULL;
+
+CREATE FUNCTION asignar_numero_pedido_turno()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.id_turno IS NOT NULL AND NEW.numero_turno IS NULL THEN
+        PERFORM pg_advisory_xact_lock(NEW.id_turno);
+        SELECT COALESCE(MAX(numero_turno), 0) + 1
+          INTO NEW.numero_turno
+          FROM pedidos
+         WHERE id_turno = NEW.id_turno;
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trg_asignar_numero_pedido_turno
+    BEFORE INSERT OR UPDATE OF id_turno ON pedidos
+    FOR EACH ROW EXECUTE FUNCTION asignar_numero_pedido_turno();
 
 CREATE TABLE historial_estados_pedido (
     id_cambio       BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

@@ -32,6 +32,7 @@ public sealed record ProductWrapping(long Id, string Name, decimal ExtraPrice);
 public sealed record Sauce(long Id, string Name);
 
 public sealed record CartSummary(long OrderId, IReadOnlyList<string> Lines, decimal Total);
+public sealed record ConfirmedWhatsAppOrder(long OrderId, int OrderNumber);
 
 public sealed record WhatsAppButton(string Id, string Title);
 

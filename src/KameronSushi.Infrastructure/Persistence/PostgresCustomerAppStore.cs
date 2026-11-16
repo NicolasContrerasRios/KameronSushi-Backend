@@ -366,7 +366,8 @@ public sealed class PostgresCustomerAppStore(
                          FROM pagos pago
                         WHERE pago.id_pedido = p.id_pedido
                    ), 'pendiente') AS medio_pago,
-                   p.creado_en
+                   p.creado_en,
+                   p.numero_turno
               FROM pedidos p
               LEFT JOIN detalle_pedidos d ON d.id_pedido = p.id_pedido
              WHERE p.id_cliente = @customer
@@ -389,7 +390,8 @@ public sealed class PostgresCustomerAppStore(
                 reader.GetDecimal(3),
                 reader.GetInt32(4),
                 reader.GetString(5),
-                reader.GetFieldValue<DateTimeOffset>(6)));
+                reader.GetFieldValue<DateTimeOffset>(6),
+                reader.IsDBNull(7) ? null : reader.GetInt32(7)));
         }
         return orders;
     }

@@ -395,7 +395,7 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
         return orderId is null ? null : new CartSummary(orderId.Value, lines, total);
     }
 
-    public async Task<long?> ConfirmCashOrderAsync(long conversationId, CancellationToken cancellationToken)
+    public async Task<ConfirmedWhatsAppOrder?> ConfirmCashOrderAsync(long conversationId, CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
@@ -421,7 +421,7 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
                 es_prueba = t.es_prueba
             FROM turno_abierto AS t
             WHERE p.id_pedido = (SELECT id_pedido FROM pedido_borrador)
-            RETURNING p.id_pedido, p.total;
+            RETURNING p.id_pedido, p.total, p.numero_turno;
             """;
         await using var updateCommand = new NpgsqlCommand(updateSql, connection, transaction);
         updateCommand.Parameters.AddWithValue("conversation_id", conversationId);
@@ -432,6 +432,7 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
         }
         var orderId = reader.GetInt64(0);
         var total = reader.GetDecimal(1);
+        var orderNumber = reader.GetInt32(2);
         await reader.CloseAsync();
 
         await using var paymentCommand = new NpgsqlCommand("""
@@ -442,7 +443,7 @@ public sealed class PostgresWhatsAppStore(NpgsqlDataSource dataSource) : IWhatsA
         paymentCommand.Parameters.AddWithValue("amount", total);
         await paymentCommand.ExecuteNonQueryAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
-        return orderId;
+        return new ConfirmedWhatsAppOrder(orderId, orderNumber);
     }
 
     public async Task RecordOutgoingAsync(long conversationId, string? providerMessageId, string type, string content, bool sent, string? error, CancellationToken cancellationToken)

@@ -654,8 +654,8 @@ public sealed class WhatsAppConversationService(
     {
         if (input == "pay:cash")
         {
-            var orderId = await store.ConfirmCashOrderAsync(conversationId, cancellationToken);
-            if (orderId is null)
+            var confirmedOrder = await store.ConfirmCashOrderAsync(conversationId, cancellationToken);
+            if (confirmedOrder is null)
             {
                 await SendAsync(conversationId, waId, new TextWhatsAppMessage("No encontré un pedido pendiente para confirmar."), cancellationToken);
                 return;
@@ -663,7 +663,7 @@ public sealed class WhatsAppConversationService(
 
             await store.UpdateConversationAsync(conversationId, "finalizado", new Dictionary<string, string?>(), cancellationToken);
             await SendAsync(conversationId, waId,
-                new TextWhatsAppMessage($"¡Pedido #{orderId} confirmado! El pago en efectivo queda pendiente para el momento de la entrega o retiro."), cancellationToken);
+                new TextWhatsAppMessage($"¡Pedido #{confirmedOrder.OrderNumber} confirmado! El pago en efectivo queda pendiente para el momento de la entrega o retiro."), cancellationToken);
             return;
         }
 

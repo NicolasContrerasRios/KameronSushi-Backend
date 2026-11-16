@@ -92,7 +92,7 @@ public sealed record CreateRewardItem(long RewardProductId, int Quantity = 1);
 
 public sealed record CreatedOrder(
     long OrderId, decimal Total, decimal Paid, decimal Change,
-    DateTimeOffset CreatedAt, int? RemainingPoints = null);
+    DateTimeOffset CreatedAt, int? RemainingPoints = null, int? OrderNumber = null);
 
 public sealed record CustomerLoyalty(
     long CustomerId, string Name, string Phone, int Points,
@@ -110,7 +110,8 @@ public sealed record PosOrderSummary(
     decimal Total,
     int ItemCount,
     string? CustomerName,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    int? OrderNumber = null);
 
 public sealed record PosOrderDetails(
     long OrderId,
@@ -127,7 +128,8 @@ public sealed record PosOrderDetails(
     string? ContactPhone,
     DateTimeOffset CreatedAt,
     IReadOnlyList<PosOrderItem> Items,
-    IReadOnlyList<PosOrderPayment> Payments);
+    IReadOnlyList<PosOrderPayment> Payments,
+    int? OrderNumber = null);
 
 public sealed record PosOrderItem(
     long DetailId,
@@ -151,7 +153,8 @@ public sealed record KitchenOrderSummary(
     string Status,
     string DeliveryType,
     DateTimeOffset CreatedAt,
-    IReadOnlyList<string> Products);
+    IReadOnlyList<string> Products,
+    int? OrderNumber = null);
 
 public sealed record KitchenPerformanceSummary(
     string DeliveryType,
@@ -171,7 +174,8 @@ public sealed record KitchenPrintJob(
     string? CustomerName,
     string? CustomerPhone,
     string? DeliveryAddress,
-    IReadOnlyList<KitchenPrintItem> Items);
+    IReadOnlyList<KitchenPrintItem> Items,
+    int? OrderNumber = null);
 
 public sealed record KitchenPrintItem(int Quantity, string Name, string? Details);
 
@@ -189,7 +193,9 @@ public sealed record OpenCashShift(decimal OpeningAmount, bool IsTest = false);
 public sealed record CloseCashShift(decimal CountedCash, string? Notes);
 public sealed record CreateCashMovement(string Type, decimal Amount, string Reason);
 public sealed record CashMovement(long MovementId, string Type, decimal Amount, string Reason, DateTimeOffset CreatedAt);
-public sealed record ShiftOrderReport(long OrderId, string DeliveryType, decimal Total, DateTimeOffset CreatedAt);
+public sealed record ShiftOrderReport(
+    long OrderId, string DeliveryType, decimal Total, DateTimeOffset CreatedAt,
+    int? OrderNumber = null);
 public sealed record CashShiftReport(
     CashShift Shift,
     int OrderCount,
