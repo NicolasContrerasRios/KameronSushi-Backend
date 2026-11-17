@@ -41,6 +41,8 @@ CREATE TABLE productos (
     requiere_configuracion BOOLEAN NOT NULL DEFAULT FALSE,
     disponible             BOOLEAN NOT NULL DEFAULT TRUE,
     orden                  INTEGER NOT NULL DEFAULT 0 CHECK (orden >= 0),
+    cantidad_rolls_promocion INTEGER NOT NULL DEFAULT 0 CHECK (cantidad_rolls_promocion BETWEEN 0 AND 20),
+    cantidad_salsas_promocion INTEGER NOT NULL DEFAULT 0 CHECK (cantidad_salsas_promocion BETWEEN 0 AND 20),
     creado_en              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     actualizado_en         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_producto_categoria_nombre UNIQUE (id_categoria, nombre_producto),
@@ -1405,6 +1407,12 @@ INSERT INTO roles (codigo, nombre, descripcion) VALUES
 
 INSERT INTO configuracion_operativa (clave, valor) VALUES
     ('tiempo_objetivo_cocina_minutos', '20');
+
+UPDATE productos SET cantidad_rolls_promocion=4,cantidad_salsas_promocion=2 WHERE nombre_producto='Promoción 40 cortes';
+UPDATE productos SET cantidad_rolls_promocion=5,cantidad_salsas_promocion=3 WHERE nombre_producto='Promoción 50 cortes';
+UPDATE productos SET cantidad_rolls_promocion=6,cantidad_salsas_promocion=4 WHERE nombre_producto='Promoción 60 cortes';
+UPDATE productos SET cantidad_rolls_promocion=7,cantidad_salsas_promocion=5 WHERE nombre_producto='Promoción 70 cortes';
+UPDATE productos SET cantidad_rolls_promocion=8,cantidad_salsas_promocion=6 WHERE nombre_producto='Promoción 80 cortes';
 
 -- Estas versiones ya forman parte de este archivo consolidado. Registrarlas
 -- evita que el backend vuelva a aplicar sus ALTER TABLE sobre una base nueva.

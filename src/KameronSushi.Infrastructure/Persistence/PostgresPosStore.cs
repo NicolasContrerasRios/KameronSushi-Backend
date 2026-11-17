@@ -32,7 +32,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                                   AND (pa.vigente_desde IS NULL OR pa.vigente_desde <= NOW())
                                   AND (pa.vigente_hasta IS NULL OR pa.vigente_hasta > NOW())
                             THEN p.precio ELSE NULL END AS precio_original,
-                       p.imagen_url, p.disponible, p.requiere_configuracion
+                       p.imagen_url, p.disponible, p.requiere_configuracion,
+                       p.cantidad_rolls_promocion, p.cantidad_salsas_promocion
                   FROM productos p
                   JOIN categorias c ON c.id_categoria = p.id_categoria
                   LEFT JOIN promociones_admin pa ON pa.id_producto = p.id_producto
@@ -47,7 +48,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                     reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetDecimal(4),
                     reader.IsDBNull(5) ? null : reader.GetDecimal(5),
                     reader.IsDBNull(6) ? null : reader.GetString(6),
-                    reader.GetBoolean(7), reader.GetBoolean(8)));
+                    reader.GetBoolean(7), reader.GetBoolean(8), reader.GetInt32(9), reader.GetInt32(10)));
             }
         }
 
@@ -71,7 +72,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
-                var row = new OptionRow(reader.GetInt64(1), reader.GetInt16(2), reader.GetString(3), reader.GetString(4),
+                var row = new OptionRow(reader.GetInt64(1), reader.GetInt64(0), reader.GetInt16(2), reader.GetString(3), reader.GetString(4),
                     reader.IsDBNull(5) ? null : reader.GetInt64(5));
                 Add(options, reader.GetInt64(0), row);
             }
@@ -94,7 +95,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             while (await reader.ReadAsync(cancellationToken))
             {
                 Add(wrappers, reader.GetInt64(0), new WrapperRow(
-                    reader.GetInt64(1), reader.GetString(2), reader.GetDecimal(3), reader.GetBoolean(4), reader.GetBoolean(5)));
+                    reader.GetInt64(1), reader.GetInt64(0), reader.GetString(2), reader.GetDecimal(3), reader.GetBoolean(4), reader.GetBoolean(5)));
             }
         }
 
@@ -123,7 +124,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                 .ToList();
 
             product.Wrappers.AddRange(productWrappers.Select(wrapper => new CatalogWrapper(
-                wrapper.Id, wrapper.Name, wrapper.PriceAdjustment, wrapper.IsDefault, wrapper.Available)));
+                wrapper.Id, wrapper.SourceProductId, wrapper.Name, wrapper.PriceAdjustment, wrapper.IsDefault, wrapper.Available)));
 
             if (productOptions.Count == 0 || availableWrappers.Count == 0 ||
                 sauces.Count == 0)
@@ -133,7 +134,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             }
 
             product.Options.AddRange(productOptions.Select(option => new CatalogRollOption(
-                option.Id, option.Number, option.Name, option.Ingredients, option.FixedWrapperId)));
+                option.Id, option.SourceProductId, option.Number, option.Name, option.Ingredients, option.FixedWrapperId)));
             product.Sauces.AddRange(sauces);
 
             var defaultSauce = sauces.FirstOrDefault(sauce => sauce.Name.Equals("Soya", StringComparison.OrdinalIgnoreCase))
@@ -158,6 +159,53 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                     product.Selections.Add(new CatalogSelection(
                         option.Id, wrapper.Id, defaultSauce.SauceId, label, details, wrapper.PriceAdjustment));
                 }
+            }
+        }
+
+        var promotionProducts = products.Where(product => product.PromotionRollCount > 0).ToList();
+        if (promotionProducts.Count > 0)
+        {
+            var promotionOptions = new List<OptionRow>();
+            await using (var command = connection.CreateCommand())
+            {
+                command.CommandText = """
+                    SELECT o.id_opcion_roll,o.id_producto,o.numero_opcion,o.nombre,o.ingredientes,o.id_producto_envoltura_fija
+                      FROM opciones_roll o
+                      JOIN productos p ON p.id_producto=o.id_producto
+                      JOIN categorias c ON c.id_categoria=p.id_categoria
+                     WHERE o.activa=TRUE AND p.activo=TRUE AND p.disponible=TRUE
+                       AND c.nombre_categoria='Rolls'
+                       AND p.nombre_producto NOT ILIKE 'Premium %'
+                       AND p.nombre_producto <> 'Rolls sin arroz'
+                     ORDER BY o.numero_opcion;
+                    """;
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                while (await reader.ReadAsync(cancellationToken))
+                    promotionOptions.Add(new OptionRow(reader.GetInt64(0),reader.GetInt64(1),reader.GetInt16(2),reader.GetString(3),reader.GetString(4),reader.IsDBNull(5)?null:reader.GetInt64(5)));
+            }
+            var sourceIds = promotionOptions.Select(option => option.SourceProductId).Distinct().ToArray();
+            var promotionWrappers = new List<WrapperRow>();
+            if (sourceIds.Length > 0)
+            {
+                await using var command = connection.CreateCommand();
+                command.CommandText = """
+                    SELECT pe.id_producto_envoltura,pe.id_producto,e.nombre,pe.precio_adicional,pe.predeterminada,
+                           (e.activa=TRUE AND pe.activa=TRUE) AS disponible
+                      FROM producto_envolturas pe JOIN envolturas e ON e.id_envoltura=pe.id_envoltura
+                     WHERE pe.id_producto=ANY(@ids) AND pe.precio_adicional=0
+                     ORDER BY pe.id_producto,disponible DESC,pe.predeterminada DESC,e.nombre;
+                    """;
+                command.Parameters.AddWithValue("ids",sourceIds);
+                await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+                while(await reader.ReadAsync(cancellationToken))
+                    promotionWrappers.Add(new WrapperRow(reader.GetInt64(0),reader.GetInt64(1),reader.GetString(2),reader.GetDecimal(3),reader.GetBoolean(4),reader.GetBoolean(5)));
+            }
+            foreach(var promotion in promotionProducts)
+            {
+                promotion.Options.AddRange(promotionOptions.Select(option=>new CatalogRollOption(option.Id,option.SourceProductId,option.Number,option.Name,option.Ingredients,option.FixedWrapperId)));
+                promotion.Wrappers.AddRange(promotionWrappers.Select(wrapper=>new CatalogWrapper(wrapper.Id,wrapper.SourceProductId,wrapper.Name,wrapper.PriceAdjustment,wrapper.IsDefault,wrapper.Available)));
+                promotion.Sauces.AddRange(sauces);
+                if(promotionOptions.Count==0 || !promotionWrappers.Any(wrapper=>wrapper.Available) || sauces.Count==0) promotion.Available=false;
             }
         }
 
@@ -1540,7 +1588,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                                  THEN pa.precio_oferta END, p.precio),
                    p.requiere_configuracion,
                    o.numero_opcion, o.ingredientes, o.id_producto_envoltura_fija,
-                   pe.precio_adicional, e.nombre, s.nombre, p.descripcion
+                   pe.precio_adicional, e.nombre, s.nombre, p.descripcion,
+                   p.cantidad_rolls_promocion,p.cantidad_salsas_promocion
               FROM productos p
               LEFT JOIN promociones_admin pa ON pa.id_producto = p.id_producto
               LEFT JOIN opciones_roll o
@@ -1569,6 +1618,19 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         var name = reader.GetString(0);
         var basePrice = reader.GetDecimal(1);
         var requiresConfiguration = reader.GetBoolean(2);
+        var promotionRollCount = reader.GetInt32(10);
+        var promotionSauceCount = reader.GetInt32(11);
+        if (promotionRollCount > 0)
+        {
+            if (item.OptionId is not null || item.ProductWrapperId is not null || item.SauceId is not null)
+                throw new ArgumentException($"La promoción {name} debe usar su selección múltiple de cortes.");
+            var promotionDetails = await ValidatePromotionSelectionsAsync(
+                connection, transaction, item, name, promotionRollCount, promotionSauceCount,
+                useOfflineSnapshot, cancellationToken);
+            var unitPrice = useOfflineSnapshot ? item.UnitPrice!.Value : basePrice;
+            return new ValidatedItem(item.ProductId,name,item.Quantity,unitPrice,false,
+                null,null,null,null,null,null,null,promotionDetails);
+        }
         if (!requiresConfiguration)
         {
             if (item.OptionId is not null || item.ProductWrapperId is not null || item.SauceId is not null)
@@ -1601,6 +1663,53 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         var configuredPrice = useOfflineSnapshot ? item.UnitPrice!.Value : basePrice + wrapperPrice;
         return new ValidatedItem(item.ProductId, name, item.Quantity, configuredPrice, true,
             item.OptionId, item.ProductWrapperId, item.SauceId, optionNumber, ingredients, wrapperName, sauceName, details);
+    }
+
+    private static async Task<string> ValidatePromotionSelectionsAsync(
+        NpgsqlConnection connection,NpgsqlTransaction transaction,CreateLocalOrderItem item,string productName,
+        int requiredRolls,int requiredSauces,bool historical,CancellationToken cancellationToken)
+    {
+        var rolls=item.PromotionRolls??[];
+        var sauces=item.PromotionSauces??[];
+        if(rolls.Count!=requiredRolls)
+            throw new ArgumentException($"{productName} requiere exactamente {requiredRolls} rolls de 10 cortes.");
+        if(sauces.Any(value=>value.Quantity<=0)||sauces.Sum(value=>value.Quantity)!=requiredSauces)
+            throw new ArgumentException($"{productName} requiere exactamente {requiredSauces} salsas.");
+
+        var lines=new List<string>(requiredRolls+requiredSauces+2){$"Selección de {requiredRolls*10} cortes:"};
+        for(var index=0;index<rolls.Count;index++)
+        {
+            var selection=rolls[index];
+            await using var command=connection.CreateCommand();command.Transaction=transaction;
+            command.CommandText="""
+                SELECT o.numero_opcion,o.ingredientes,e.nombre
+                  FROM opciones_roll o
+                  JOIN productos p ON p.id_producto=o.id_producto
+                  JOIN categorias c ON c.id_categoria=p.id_categoria
+                  JOIN producto_envolturas pe ON pe.id_producto_envoltura=@wrapper AND pe.id_producto=p.id_producto
+                  JOIN envolturas e ON e.id_envoltura=pe.id_envoltura
+                 WHERE o.id_opcion_roll=@option AND c.nombre_categoria='Rolls'
+                   AND p.nombre_producto NOT ILIKE 'Premium %' AND p.nombre_producto<>'Rolls sin arroz'
+                   AND pe.precio_adicional=0
+                   AND (@historical=TRUE OR (o.activa=TRUE AND p.activo=TRUE AND p.disponible=TRUE AND pe.activa=TRUE AND e.activa=TRUE));
+                """;
+            command.Parameters.AddWithValue("option",selection.OptionId);command.Parameters.AddWithValue("wrapper",selection.ProductWrapperId);
+            command.Parameters.AddWithValue("historical",historical);
+            await using var reader=await command.ExecuteReaderAsync(cancellationToken);
+            if(!await reader.ReadAsync(cancellationToken))throw new ArgumentException($"El roll {index+1} de {productName} ya no está disponible o no coincide con su envoltura.");
+            lines.Add($"{index+1}. N.º {reader.GetInt16(0)} · {reader.GetString(1)} · Envoltura: {reader.GetString(2)}");
+        }
+        lines.Add("Salsas:");
+        foreach(var selection in sauces)
+        {
+            await using var command=connection.CreateCommand();command.Transaction=transaction;
+            command.CommandText="SELECT nombre FROM salsas WHERE id_salsa=@id AND (@historical=TRUE OR activa=TRUE);";
+            command.Parameters.AddWithValue("id",selection.SauceId);command.Parameters.AddWithValue("historical",historical);
+            var name=await command.ExecuteScalarAsync(cancellationToken) as string;
+            if(name is null)throw new ArgumentException("Una de las salsas de la promoción ya no está disponible.");
+            lines.Add($"- {selection.Quantity} × {name}");
+        }
+        return string.Join("\n",lines);
     }
 
     private static string NormalizePaymentMethod(string method) => method.Trim().ToLowerInvariant() switch
@@ -1725,7 +1834,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
 
     private static CatalogProduct ToCatalogProduct(ProductBuilder product) =>
         new(product.Id, product.Name, product.Category, product.Description, product.Price,
-            product.OriginalPrice, product.ImageUrl, product.Available, product.Options, product.Wrappers, product.Sauces, product.Selections);
+            product.OriginalPrice, product.ImageUrl, product.Available, product.PromotionRollCount, product.PromotionSauceCount,
+            product.Options, product.Wrappers, product.Sauces, product.Selections);
 
     private static void Add<T>(Dictionary<long, List<T>> values, long key, T item)
     {
@@ -1746,7 +1856,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         return digits.Length == 9 && digits.StartsWith('9') ? $"56{digits}" : digits;
     }
 
-    private sealed class ProductBuilder(long id, string name, string category, string? description, decimal price, decimal? originalPrice, string? imageUrl, bool available, bool requiresConfiguration)
+    private sealed class ProductBuilder(long id, string name, string category, string? description, decimal price, decimal? originalPrice, string? imageUrl, bool available, bool requiresConfiguration, int promotionRollCount, int promotionSauceCount)
     {
         public long Id { get; } = id;
         public string Name { get; } = name;
@@ -1757,14 +1867,16 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         public string? ImageUrl { get; } = imageUrl;
         public bool Available { get; set; } = available;
         public bool RequiresConfiguration { get; } = requiresConfiguration;
+        public int PromotionRollCount { get; } = promotionRollCount;
+        public int PromotionSauceCount { get; } = promotionSauceCount;
         public List<CatalogRollOption> Options { get; } = [];
         public List<CatalogWrapper> Wrappers { get; } = [];
         public List<CatalogSauce> Sauces { get; } = [];
         public List<CatalogSelection> Selections { get; } = [];
     }
 
-    private sealed record OptionRow(long Id, short Number, string Name, string Ingredients, long? FixedWrapperId);
-    private sealed record WrapperRow(long Id, string Name, decimal PriceAdjustment, bool IsDefault, bool Available);
+    private sealed record OptionRow(long Id, long SourceProductId, short Number, string Name, string Ingredients, long? FixedWrapperId);
+    private sealed record WrapperRow(long Id, long SourceProductId, string Name, decimal PriceAdjustment, bool IsDefault, bool Available);
     private sealed record ValidatedItem(
         long ProductId, string Name, int Quantity, decimal UnitPrice, bool RequiresConfiguration,
         long? OptionId, long? ProductWrapperId, long? SauceId, short? OptionNumber,

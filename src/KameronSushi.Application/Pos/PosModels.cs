@@ -9,6 +9,8 @@ public sealed record CatalogProduct(
     decimal? OriginalPrice,
     string? ImageUrl,
     bool Available,
+    int PromotionRollCount,
+    int PromotionSauceCount,
     IReadOnlyList<CatalogRollOption> Options,
     IReadOnlyList<CatalogWrapper> Wrappers,
     IReadOnlyList<CatalogSauce> Sauces,
@@ -25,6 +27,7 @@ public sealed record CatalogSelection(
 
 public sealed record CatalogRollOption(
     long OptionId,
+    long SourceProductId,
     short Number,
     string Name,
     string Ingredients,
@@ -32,6 +35,7 @@ public sealed record CatalogRollOption(
 
 public sealed record CatalogWrapper(
     long ProductWrapperId,
+    long SourceProductId,
     string Name,
     decimal PriceAdjustment,
     bool IsDefault,
@@ -66,7 +70,12 @@ public sealed record CreateLocalOrderItem(
     long? ProductWrapperId,
     long? SauceId,
     int Quantity = 1,
-    decimal? UnitPrice = null);
+    decimal? UnitPrice = null,
+    IReadOnlyList<CreatePromotionRollSelection>? PromotionRolls = null,
+    IReadOnlyList<CreatePromotionSauceSelection>? PromotionSauces = null);
+
+public sealed record CreatePromotionRollSelection(long OptionId, long ProductWrapperId);
+public sealed record CreatePromotionSauceSelection(long SauceId, int Quantity);
 
 public sealed record CreateLocalPayment(string Method, decimal Amount);
 
