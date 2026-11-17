@@ -34,7 +34,8 @@ public sealed record CatalogWrapper(
     long ProductWrapperId,
     string Name,
     decimal PriceAdjustment,
-    bool IsDefault);
+    bool IsDefault,
+    bool Available);
 
 public sealed record CatalogSauce(long SauceId, string Name, string? Description);
 

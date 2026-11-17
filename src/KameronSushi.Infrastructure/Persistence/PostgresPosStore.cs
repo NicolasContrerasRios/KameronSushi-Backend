@@ -82,18 +82,19 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         {
             command.CommandText = """
                 SELECT pe.id_producto, pe.id_producto_envoltura, e.nombre,
-                       pe.precio_adicional, pe.predeterminada
+                       pe.precio_adicional, pe.predeterminada,
+                       (e.activa = TRUE AND pe.activa = TRUE) AS disponible
                   FROM producto_envolturas pe
                   JOIN envolturas e ON e.id_envoltura = pe.id_envoltura
-                 WHERE e.activa = TRUE AND pe.activa = TRUE AND pe.id_producto = ANY(@product_ids)
-                 ORDER BY pe.id_producto, pe.predeterminada DESC, pe.precio_adicional, e.nombre;
+                 WHERE pe.id_producto = ANY(@product_ids)
+                 ORDER BY pe.id_producto, disponible DESC, pe.predeterminada DESC, pe.precio_adicional, e.nombre;
                 """;
             command.Parameters.AddWithValue("product_ids", configurableIds);
             await using var reader = await command.ExecuteReaderAsync(cancellationToken);
             while (await reader.ReadAsync(cancellationToken))
             {
                 Add(wrappers, reader.GetInt64(0), new WrapperRow(
-                    reader.GetInt64(1), reader.GetString(2), reader.GetDecimal(3), reader.GetBoolean(4)));
+                    reader.GetInt64(1), reader.GetString(2), reader.GetDecimal(3), reader.GetBoolean(4), reader.GetBoolean(5)));
             }
         }
 
@@ -112,8 +113,19 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
 
         foreach (var product in products.Where(product => product.RequiresConfiguration))
         {
-            if (!options.TryGetValue(product.Id, out var productOptions) || productOptions.Count == 0 ||
-                !wrappers.TryGetValue(product.Id, out var productWrappers) || productWrappers.Count == 0 ||
+            options.TryGetValue(product.Id, out var configuredOptions);
+            wrappers.TryGetValue(product.Id, out var configuredWrappers);
+            var productWrappers = configuredWrappers ?? [];
+            var availableWrappers = productWrappers.Where(wrapper => wrapper.Available).ToList();
+            var productOptions = (configuredOptions ?? [])
+                .Where(option => option.FixedWrapperId is null ||
+                                 availableWrappers.Any(wrapper => wrapper.Id == option.FixedWrapperId))
+                .ToList();
+
+            product.Wrappers.AddRange(productWrappers.Select(wrapper => new CatalogWrapper(
+                wrapper.Id, wrapper.Name, wrapper.PriceAdjustment, wrapper.IsDefault, wrapper.Available)));
+
+            if (productOptions.Count == 0 || availableWrappers.Count == 0 ||
                 sauces.Count == 0)
             {
                 product.Available = false;
@@ -122,8 +134,6 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
 
             product.Options.AddRange(productOptions.Select(option => new CatalogRollOption(
                 option.Id, option.Number, option.Name, option.Ingredients, option.FixedWrapperId)));
-            product.Wrappers.AddRange(productWrappers.Select(wrapper => new CatalogWrapper(
-                wrapper.Id, wrapper.Name, wrapper.PriceAdjustment, wrapper.IsDefault)));
             product.Sauces.AddRange(sauces);
 
             var defaultSauce = sauces.FirstOrDefault(sauce => sauce.Name.Equals("Soya", StringComparison.OrdinalIgnoreCase))
@@ -131,7 +141,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             if (product.Category.Equals("Hand rolls", StringComparison.OrdinalIgnoreCase))
             {
                 var option = productOptions[0];
-                product.Selections.AddRange(productWrappers.Select(wrapper => new CatalogSelection(
+                product.Selections.AddRange(availableWrappers.Select(wrapper => new CatalogSelection(
                     option.Id, wrapper.Id, defaultSauce.SauceId, wrapper.Name,
                     $"Envoltura: {wrapper.Name}", wrapper.PriceAdjustment)));
             }
@@ -140,8 +150,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                 foreach (var option in productOptions)
                 {
                     var wrapper = option.FixedWrapperId is long fixedWrapperId
-                        ? productWrappers.FirstOrDefault(value => value.Id == fixedWrapperId)
-                        : productWrappers.FirstOrDefault(value => value.IsDefault) ?? productWrappers[0];
+                        ? availableWrappers.FirstOrDefault(value => value.Id == fixedWrapperId)
+                        : availableWrappers.FirstOrDefault(value => value.IsDefault) ?? availableWrappers[0];
                     if (wrapper is null) continue;
                     var label = $"N.º {option.Number} · {option.Ingredients}";
                     var details = option.FixedWrapperId is null ? label : $"{label} · Envoltura: {wrapper.Name}";
@@ -1754,7 +1764,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
     }
 
     private sealed record OptionRow(long Id, short Number, string Name, string Ingredients, long? FixedWrapperId);
-    private sealed record WrapperRow(long Id, string Name, decimal PriceAdjustment, bool IsDefault);
+    private sealed record WrapperRow(long Id, string Name, decimal PriceAdjustment, bool IsDefault, bool Available);
     private sealed record ValidatedItem(
         long ProductId, string Name, int Quantity, decimal UnitPrice, bool RequiresConfiguration,
         long? OptionId, long? ProductWrapperId, long? SauceId, short? OptionNumber,
