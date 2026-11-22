@@ -110,6 +110,7 @@ public sealed class PosController(IPosStore store, IPushNotificationService noti
     public async Task<ActionResult<IReadOnlyList<PosOrderSummary>>> GetOrders(
         [FromQuery] string? status,
         [FromQuery] int limit = 50,
+        [FromQuery] DateOnly? date = null,
         CancellationToken cancellationToken = default)
     {
         var normalizedStatus = string.IsNullOrWhiteSpace(status) ? null : status.Trim().ToLowerInvariant();
@@ -129,7 +130,7 @@ public sealed class PosController(IPosStore store, IPushNotificationService noti
                 detail: "El límite debe estar entre 1 y 200.");
         }
 
-        return Ok(await store.GetOrdersAsync(normalizedStatus, limit, cancellationToken));
+        return Ok(await store.GetOrdersAsync(normalizedStatus, limit, date, cancellationToken));
     }
 
     [HttpGet("orders/{orderId:long}")]

@@ -8,7 +8,8 @@ public interface IPosStore
     Task<CreatedOrder> CreateCustomerOrderAsync(CreateCustomerOrder command, long? authenticatedCustomerId, CancellationToken cancellationToken);
     Task<CustomerLoyalty?> GetCustomerLoyaltyByPhoneAsync(string phone, CancellationToken cancellationToken);
     Task<CreatedOrder> CreateLocalOrderAsync(CreateLocalOrder command, long userId, CancellationToken cancellationToken);
-    Task<IReadOnlyList<PosOrderSummary>> GetOrdersAsync(string? status, int limit, CancellationToken cancellationToken);
+    Task<IReadOnlyList<PosOrderSummary>> GetOrdersAsync(
+        string? status, int limit, DateOnly? localDate, CancellationToken cancellationToken);
     Task<PosOrderDetails?> GetOrderAsync(long orderId, CancellationToken cancellationToken);
     Task<IReadOnlyList<OrderStateChange>> GetOrderHistoryAsync(long orderId, CancellationToken cancellationToken);
     Task<bool> CancelOrderAsync(long orderId, string reason, long userId, CancellationToken cancellationToken);
