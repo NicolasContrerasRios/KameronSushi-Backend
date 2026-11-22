@@ -771,7 +771,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
     public async Task<IReadOnlyList<PosOrderSummary>> GetOrdersAsync(
         string? status,
         int limit,
-        DateOnly? localDate,
+        long? shiftId,
         CancellationToken cancellationToken)
     {
         await using var command = dataSource.CreateCommand("""
@@ -782,13 +782,13 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
               LEFT JOIN clientes c ON c.id_cliente = p.id_cliente
               LEFT JOIN detalle_pedidos d ON d.id_pedido = p.id_pedido
              WHERE (@status IS NULL OR p.estado = @status)
-               AND (@local_date IS NULL OR (p.creado_en AT TIME ZONE 'America/Santiago')::date = @local_date)
+               AND (@shift_id IS NULL OR p.id_turno = @shift_id)
              GROUP BY p.id_pedido, c.nombre
              ORDER BY p.creado_en DESC
              LIMIT @limit;
             """);
         command.Parameters.Add("status", NpgsqlDbType.Varchar).Value = (object?)status ?? DBNull.Value;
-        command.Parameters.Add("local_date", NpgsqlDbType.Date).Value = (object?)localDate ?? DBNull.Value;
+        command.Parameters.Add("shift_id", NpgsqlDbType.Bigint).Value = (object?)shiftId ?? DBNull.Value;
         command.Parameters.AddWithValue("limit", limit);
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var orders = new List<PosOrderSummary>();

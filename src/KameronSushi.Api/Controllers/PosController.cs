@@ -110,7 +110,7 @@ public sealed class PosController(IPosStore store, IPushNotificationService noti
     public async Task<ActionResult<IReadOnlyList<PosOrderSummary>>> GetOrders(
         [FromQuery] string? status,
         [FromQuery] int limit = 50,
-        [FromQuery] DateOnly? date = null,
+        [FromQuery] long? shiftId = null,
         CancellationToken cancellationToken = default)
     {
         var normalizedStatus = string.IsNullOrWhiteSpace(status) ? null : status.Trim().ToLowerInvariant();
@@ -130,7 +130,15 @@ public sealed class PosController(IPosStore store, IPushNotificationService noti
                 detail: "El límite debe estar entre 1 y 200.");
         }
 
-        return Ok(await store.GetOrdersAsync(normalizedStatus, limit, date, cancellationToken));
+        if (shiftId is <= 0)
+        {
+            return Problem(
+                statusCode: StatusCodes.Status400BadRequest,
+                title: "Turno inválido",
+                detail: "El identificador del turno debe ser mayor que cero.");
+        }
+
+        return Ok(await store.GetOrdersAsync(normalizedStatus, limit, shiftId, cancellationToken));
     }
 
     [HttpGet("orders/{orderId:long}")]
