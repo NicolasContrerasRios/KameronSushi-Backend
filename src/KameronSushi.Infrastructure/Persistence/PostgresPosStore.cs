@@ -1625,6 +1625,10 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         {
             if (item.OptionId is not null || item.ProductWrapperId is not null || item.SauceId is not null)
                 throw new ArgumentException($"La promoción {name} debe usar su selección múltiple de cortes.");
+
+            // Npgsql no permite ejecutar las consultas de cada roll mientras el lector
+            // de la consulta principal continúa abierto sobre la misma conexión.
+            await reader.DisposeAsync();
             var promotionValidation = await ValidatePromotionSelectionsAsync(
                 connection, transaction, item, name, promotionRollCount, promotionSauceCount,
                 useOfflineSnapshot, cancellationToken);
