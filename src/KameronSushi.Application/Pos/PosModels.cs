@@ -11,6 +11,7 @@ public sealed record CatalogProduct(
     bool Available,
     int PromotionRollCount,
     int PromotionSauceCount,
+    int PromotionMaxSameOption,
     IReadOnlyList<CatalogRollOption> Options,
     IReadOnlyList<CatalogWrapper> Wrappers,
     IReadOnlyList<CatalogSauce> Sauces,
