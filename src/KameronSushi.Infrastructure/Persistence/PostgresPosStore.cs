@@ -118,8 +118,13 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             options.TryGetValue(product.Id, out var configuredOptions);
             wrappers.TryGetValue(product.Id, out var configuredWrappers);
             var productWrappers = configuredWrappers ?? [];
+            if (product.Category.Equals("Hand rolls", StringComparison.OrdinalIgnoreCase))
+                productWrappers = productWrappers.Where(wrapper => wrapper.Name.Equals("Panko", StringComparison.OrdinalIgnoreCase)).ToList();
             var availableWrappers = productWrappers.Where(wrapper => wrapper.Available).ToList();
             var productOptions = (configuredOptions ?? [])
+                .Select(option => product.Category.Equals("Hand rolls", StringComparison.OrdinalIgnoreCase)
+                    ? option with { FixedWrapperId = availableWrappers.FirstOrDefault()?.Id }
+                    : option)
                 .Where(option => option.FixedWrapperId is null ||
                                  availableWrappers.Any(wrapper => wrapper.Id == option.FixedWrapperId))
                 .ToList();
@@ -177,7 +182,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                      WHERE o.activa=TRUE AND p.activo=TRUE AND p.disponible=TRUE
                        AND c.nombre_categoria='Rolls'
                        AND p.nombre_producto NOT ILIKE 'Premium %'
-                       AND p.nombre_producto <> 'Rolls sin arroz'
+                       AND o.numero_opcion BETWEEN 1 AND 44
                      ORDER BY o.numero_opcion;
                     """;
                 await using var reader = await command.ExecuteReaderAsync(cancellationToken);
@@ -1685,7 +1690,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                    p.requiere_configuracion,
                    o.numero_opcion, o.ingredientes, o.id_producto_envoltura_fija,
                    pe.precio_adicional, e.nombre, s.nombre, p.descripcion,
-                   p.cantidad_rolls_promocion,p.cantidad_salsas_promocion
+                   p.cantidad_rolls_promocion,p.cantidad_salsas_promocion,
+                   (SELECT c.nombre_categoria FROM categorias c WHERE c.id_categoria=p.id_categoria)
               FROM productos p
               LEFT JOIN promociones_admin pa ON pa.id_producto = p.id_producto
               LEFT JOIN opciones_roll o
@@ -1693,6 +1699,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                AND (@historical = TRUE OR o.activa = TRUE)
               LEFT JOIN producto_envolturas pe
                 ON pe.id_producto_envoltura = @wrapper_id AND pe.id_producto = p.id_producto
+               AND (@historical = TRUE OR pe.activa = TRUE)
               LEFT JOIN envolturas e
                 ON e.id_envoltura = pe.id_envoltura AND (@historical = TRUE OR e.activa = TRUE)
               LEFT JOIN salsas s
@@ -1760,6 +1767,9 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         var ingredients = reader.GetString(4);
         var wrapperPrice = reader.GetDecimal(6);
         var wrapperName = reader.GetString(7);
+        if (reader.GetString(12).Equals("Hand rolls", StringComparison.OrdinalIgnoreCase) &&
+            !wrapperName.Equals("Panko", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Los handrolls requieren envoltura de panko.");
         var sauceName = reader.GetString(8);
         var details = $"N.º {optionNumber} · {ingredients} · Envoltura: {wrapperName} · Salsa: {sauceName}";
         var configuredPrice = useOfflineSnapshot ? item.UnitPrice!.Value : basePrice + wrapperPrice;
@@ -1799,7 +1809,9 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                   JOIN producto_envolturas pe ON pe.id_producto_envoltura=@wrapper AND pe.id_producto=p.id_producto
                   JOIN envolturas e ON e.id_envoltura=pe.id_envoltura
                  WHERE o.id_opcion_roll=@option AND c.nombre_categoria='Rolls'
-                   AND p.nombre_producto NOT ILIKE 'Premium %' AND p.nombre_producto<>'Rolls sin arroz'
+                   AND p.nombre_producto NOT ILIKE 'Premium %'
+                   AND o.numero_opcion BETWEEN 1 AND 44
+                   AND (o.id_producto_envoltura_fija IS NULL OR o.id_producto_envoltura_fija=pe.id_producto_envoltura)
                    AND (@historical=TRUE OR (o.activa=TRUE AND p.activo=TRUE AND p.disponible=TRUE AND pe.activa=TRUE AND e.activa=TRUE));
                 """;
             command.Parameters.AddWithValue("option",selection.OptionId);command.Parameters.AddWithValue("wrapper",selection.ProductWrapperId);

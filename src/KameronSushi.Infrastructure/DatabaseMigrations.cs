@@ -668,6 +668,35 @@ public static class DatabaseMigrations
             await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        if (!await IsAppliedAsync(connection, transaction, "025_handroll_panko", cancellationToken))
+        {
+            await using var migrationCommand = connection.CreateCommand();
+            migrationCommand.Transaction = transaction;
+            migrationCommand.CommandText = """
+                INSERT INTO producto_envolturas (id_producto,id_envoltura,precio_adicional,predeterminada,activa)
+                SELECT p.id_producto,e.id_envoltura,0,TRUE,TRUE
+                  FROM productos p JOIN categorias c ON c.id_categoria=p.id_categoria
+                  CROSS JOIN envolturas e
+                 WHERE LOWER(c.nombre_categoria)='hand rolls' AND LOWER(e.nombre)='panko'
+                ON CONFLICT (id_producto,id_envoltura) DO UPDATE
+                    SET precio_adicional=0,predeterminada=TRUE,activa=TRUE;
+                UPDATE producto_envolturas pe SET activa=FALSE,predeterminada=FALSE
+                  FROM productos p,categorias c,envolturas e
+                 WHERE pe.id_producto=p.id_producto AND c.id_categoria=p.id_categoria
+                   AND e.id_envoltura=pe.id_envoltura
+                   AND LOWER(c.nombre_categoria)='hand rolls' AND LOWER(e.nombre)<>'panko';
+                UPDATE opciones_roll o SET id_producto_envoltura_fija=pe.id_producto_envoltura
+                  FROM productos p,categorias c,producto_envolturas pe,envolturas e
+                 WHERE o.id_producto=p.id_producto AND c.id_categoria=p.id_categoria
+                   AND pe.id_producto=p.id_producto AND e.id_envoltura=pe.id_envoltura
+                   AND LOWER(c.nombre_categoria)='hand rolls' AND LOWER(e.nombre)='panko';
+                UPDATE categorias SET descripcion='Hand rolls con envoltura fija de panko'
+                 WHERE LOWER(nombre_categoria)='hand rolls';
+                INSERT INTO schema_migrations(id) VALUES('025_handroll_panko');
+                """;
+            await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
     }
 
