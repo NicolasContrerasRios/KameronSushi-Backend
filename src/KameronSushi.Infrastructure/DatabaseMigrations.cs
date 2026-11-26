@@ -694,8 +694,6 @@ public static class DatabaseMigrations
                  WHERE o.id_producto=p.id_producto AND c.id_categoria=p.id_categoria
                    AND pe.id_producto=p.id_producto AND e.id_envoltura=pe.id_envoltura
                    AND LOWER(c.nombre_categoria)='hand rolls' AND LOWER(e.nombre)='panko';
-                UPDATE categorias SET descripcion='Hand rolls con envoltura fija de panko'
-                 WHERE LOWER(nombre_categoria)='hand rolls';
                 INSERT INTO schema_migrations(id) VALUES('025_handroll_panko');
                 """;
             await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
