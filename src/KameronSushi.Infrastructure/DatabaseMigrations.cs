@@ -648,6 +648,26 @@ public static class DatabaseMigrations
             await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
+        if (!await IsAppliedAsync(connection, transaction, "024_shift_estimated_wait", cancellationToken))
+        {
+            await using var migrationCommand = connection.CreateCommand();
+            migrationCommand.Transaction = transaction;
+            migrationCommand.CommandText = """
+                ALTER TABLE turnos ADD COLUMN IF NOT EXISTS espera_minima_minutos INTEGER;
+                ALTER TABLE turnos ADD COLUMN IF NOT EXISTS espera_maxima_minutos INTEGER;
+                ALTER TABLE turnos DROP CONSTRAINT IF EXISTS ck_turno_tiempo_espera;
+                ALTER TABLE turnos ADD CONSTRAINT ck_turno_tiempo_espera CHECK (
+                    (espera_minima_minutos IS NULL AND espera_maxima_minutos IS NULL)
+                    OR
+                    (espera_minima_minutos BETWEEN 5 AND 240
+                     AND espera_maxima_minutos BETWEEN 5 AND 240
+                     AND espera_minima_minutos <= espera_maxima_minutos)
+                );
+                INSERT INTO schema_migrations(id) VALUES('024_shift_estimated_wait');
+                """;
+            await migrationCommand.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await transaction.CommitAsync(cancellationToken);
     }
 

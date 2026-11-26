@@ -609,6 +609,8 @@ CREATE TABLE turnos (
     efectivo_contado     NUMERIC(12,0),
     efectivo_esperado    NUMERIC(12,0),
     diferencia_efectivo  NUMERIC(12,0),
+    espera_minima_minutos INTEGER,
+    espera_maxima_minutos INTEGER,
     es_prueba            BOOLEAN NOT NULL DEFAULT FALSE,
     observaciones        TEXT,
     creado_en            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -621,6 +623,13 @@ CREATE TABLE turnos (
     ),
     CONSTRAINT ck_turno_fechas CHECK (cerrado_en IS NULL OR cerrado_en >= abierto_en),
     CONSTRAINT ck_turno_monto_inicial CHECK (monto_inicial >= 0),
+    CONSTRAINT ck_turno_tiempo_espera CHECK (
+        (espera_minima_minutos IS NULL AND espera_maxima_minutos IS NULL)
+        OR
+        (espera_minima_minutos BETWEEN 5 AND 240
+         AND espera_maxima_minutos BETWEEN 5 AND 240
+         AND espera_minima_minutos <= espera_maxima_minutos)
+    ),
     CONSTRAINT ck_turno_efectivo_contado CHECK (
         efectivo_contado IS NULL OR efectivo_contado >= 0
     ),

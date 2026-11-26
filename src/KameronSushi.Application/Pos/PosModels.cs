@@ -51,7 +51,11 @@ public sealed record CreateLocalOrder(
     IReadOnlyList<CreateRewardItem>? Rewards = null,
     Guid? ClientOrderId = null,
     bool IsOfflineSale = false,
-    string? ContactPhone = null);
+    string? ContactPhone = null,
+    string DeliveryType = "retiro",
+    LocalDeliveryDetails? Delivery = null);
+
+public sealed record LocalDeliveryDetails(string Address, string Phone, string? Zone = null);
 
 public sealed record CancelOrder(string Reason);
 
@@ -95,9 +99,13 @@ public sealed record CustomerDeliveryAddress(
     string Street,
     string Number,
     string County,
-    string? Reference = null);
+    string? Reference = null,
+    string? Zone = null);
 
-public sealed record CustomerOrderingAvailability(bool IsOpen);
+public sealed record CustomerOrderingAvailability(
+    bool IsOpen,
+    int? EstimatedWaitMinMinutes = null,
+    int? EstimatedWaitMaxMinutes = null);
 
 public sealed record CreateRewardItem(long RewardProductId, int Quantity = 1);
 
@@ -137,6 +145,7 @@ public sealed record PosOrderDetails(
     string? CustomerName,
     string? CustomerPhone,
     string? ContactPhone,
+    string? DeliveryAddress,
     DateTimeOffset CreatedAt,
     IReadOnlyList<PosOrderItem> Items,
     IReadOnlyList<PosOrderPayment> Payments,
@@ -198,9 +207,12 @@ public sealed record CashShift(
     long OpenedByUserId,
     string OpenedByName,
     decimal OpeningAmount,
-    bool IsTest);
+    bool IsTest,
+    int? EstimatedWaitMinMinutes = null,
+    int? EstimatedWaitMaxMinutes = null);
 
 public sealed record OpenCashShift(decimal OpeningAmount, bool IsTest = false);
+public sealed record UpdateEstimatedWait(int? MinMinutes, int? MaxMinutes);
 public sealed record CloseCashShift(decimal CountedCash, string? Notes);
 public sealed record CreateCashMovement(string Type, decimal Amount, string Reason);
 public sealed record CashMovement(long MovementId, string Type, decimal Amount, string Reason, DateTimeOffset CreatedAt);

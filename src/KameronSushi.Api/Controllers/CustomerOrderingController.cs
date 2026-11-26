@@ -17,8 +17,14 @@ public sealed class CustomerOrderingController(IPosStore store, ICustomerAppStor
         Ok(await store.GetCatalogAsync(cancellationToken));
 
     [HttpGet("availability")]
-    public async Task<ActionResult<CustomerOrderingAvailability>> GetAvailability(CancellationToken cancellationToken) =>
-        Ok(new CustomerOrderingAvailability(await store.GetCurrentShiftAsync(cancellationToken) is not null));
+    public async Task<ActionResult<CustomerOrderingAvailability>> GetAvailability(CancellationToken cancellationToken)
+    {
+        var shift = await store.GetCurrentShiftAsync(cancellationToken);
+        return Ok(new CustomerOrderingAvailability(
+            shift is not null,
+            shift?.EstimatedWaitMinMinutes,
+            shift?.EstimatedWaitMaxMinutes));
+    }
 
     [HttpGet("orders")]
     public async Task<ActionResult<IReadOnlyList<CustomerOrderSummary>>> GetOrders(

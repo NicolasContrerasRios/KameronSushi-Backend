@@ -287,6 +287,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         }
         var subtotal = validatedItems.Sum(item => item.UnitPrice * item.Quantity);
         if (subtotal < 0) throw new ArgumentException("El total del pedido no es válido.");
+        var shippingCost = delivery is null ? 0 : KameronSushi.Shared.DeliveryZones.GetFee(delivery.Zone);
+        var total = subtotal + shippingCost;
 
         var customerId = authenticatedCustomerId ?? await GetOrCreateCustomerAsync(
             connection, transaction, customerName, customerPhone, cancellationToken);
@@ -313,13 +315,14 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                      canal_origen, costo_envio, id_operacion_cliente, observaciones, telefono_contacto, es_prueba)
                 VALUES
                     (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, @delivery_type,
-                     'web', 0, @client_order_id, 'Pedido creado desde la aplicación Android', @contact_phone,
+                     'web', @shipping_cost, @client_order_id, 'Pedido creado desde la aplicación Android', @contact_phone,
                      (SELECT es_prueba FROM turnos WHERE id_turno = @shift_id))
                 RETURNING id_pedido, numero_turno, creado_en;
                 """;
             orderCommand.Parameters.AddWithValue("customer_id", customerId);
             orderCommand.Parameters.AddWithValue("shift_id", shiftId);
             orderCommand.Parameters.AddWithValue("subtotal", subtotal);
+            orderCommand.Parameters.AddWithValue("shipping_cost", shippingCost);
             orderCommand.Parameters.AddWithValue("delivery_type", deliveryType);
             orderCommand.Parameters.AddWithValue("client_order_id", command.ClientOrderId);
             orderCommand.Parameters.AddWithValue("contact_phone", NormalizeOptionalContactPhone(customerPhone)!);
@@ -347,7 +350,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             deliveryCommand.Parameters.AddWithValue("number", delivery.Number.Trim());
             deliveryCommand.Parameters.AddWithValue("county", delivery.County.Trim());
             deliveryCommand.Parameters.Add("reference", NpgsqlDbType.Text).Value =
-                string.IsNullOrWhiteSpace(delivery.Reference) ? DBNull.Value : delivery.Reference.Trim();
+                $"Zona: {delivery.Zone}. {delivery.Reference}".Trim();
             await deliveryCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
@@ -410,7 +413,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             await rewardCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        if (subtotal > 0) await using (var paymentCommand = connection.CreateCommand())
+        if (total > 0) await using (var paymentCommand = connection.CreateCommand())
         {
             paymentCommand.Transaction = transaction;
             paymentCommand.CommandText = """
@@ -418,7 +421,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                 VALUES (@order_id, @amount, @method, 'pendiente', 'manual', 'CLP');
                 """;
             paymentCommand.Parameters.AddWithValue("order_id", orderId);
-            paymentCommand.Parameters.AddWithValue("amount", subtotal);
+            paymentCommand.Parameters.AddWithValue("amount", total);
             paymentCommand.Parameters.AddWithValue("method", paymentMethod);
             await paymentCommand.ExecuteNonQueryAsync(cancellationToken);
         }
@@ -440,7 +443,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         }
 
         await transaction.CommitAsync(cancellationToken);
-        return new CreatedOrder(orderId, subtotal, 0, 0, createdAt, remainingPoints, orderNumber);
+        return new CreatedOrder(orderId, total, 0, 0, createdAt, remainingPoints, orderNumber);
     }
 
     public async Task<CustomerLoyalty?> GetCustomerLoyaltyByPhoneAsync(string phone, CancellationToken cancellationToken)
@@ -528,7 +531,28 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             throw new ArgumentException("Los canjes de puntos no se pueden registrar offline.");
         if (command.IsOfflineSale && purchaseItems.Any(item => item.UnitPrice is null or < 0 or > 10_000_000))
             throw new ArgumentException("Cada producto de una venta offline debe incluir un precio válido.");
-        var contactPhone = NormalizeOptionalContactPhone(command.ContactPhone);
+        var deliveryType = command.DeliveryType?.Trim().ToLowerInvariant() switch
+        {
+            null or "" or "retiro" => "retiro",
+            "delivery" => "delivery",
+            _ => throw new ArgumentException("El tipo de entrega debe ser retiro o delivery.")
+        };
+        LocalDeliveryDetails? delivery = null;
+        if (deliveryType == "delivery")
+        {
+            delivery = command.Delivery
+                ?? throw new ArgumentException("La dirección y el teléfono son obligatorios para delivery.");
+            if (string.IsNullOrWhiteSpace(delivery.Address) || delivery.Address.Trim().Length < 5)
+                throw new ArgumentException("Ingresa una dirección válida para el delivery.");
+            if (delivery.Address.Trim().Length > 150)
+                throw new ArgumentException("La dirección no puede superar 150 caracteres.");
+        }
+        var contactPhone = NormalizeOptionalContactPhone(delivery?.Phone ?? command.ContactPhone);
+        if (deliveryType == "delivery" && contactPhone is null)
+            throw new ArgumentException("Ingresa un teléfono válido para el delivery.");
+        var localDeliveryAddress = delivery is null
+            ? (Street: string.Empty, Number: string.Empty)
+            : SplitLocalDeliveryAddress(delivery.Address);
 
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
@@ -579,14 +603,16 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         }
 
         var subtotal = validatedItems.Sum(item => item.UnitPrice * item.Quantity);
+        var shippingCost = delivery is null ? 0 : KameronSushi.Shared.DeliveryZones.GetFee(delivery.Zone);
+        var total = subtotal + shippingCost;
         var normalizedPayments = payments
             .Select(payment => new NormalizedPayment(NormalizePaymentMethod(payment.Method), payment.Amount))
             .ToList();
         var paid = normalizedPayments.Sum(payment => payment.Amount);
-        if (subtotal > 0 && normalizedPayments.Count == 0) throw new ArgumentException("El pedido debe contener al menos un pago.");
-        if (paid < subtotal) throw new ArgumentException("El monto pagado es menor que el total del pedido.");
+        if (total > 0 && normalizedPayments.Count == 0) throw new ArgumentException("El pedido debe contener al menos un pago.");
+        if (paid < total) throw new ArgumentException("El monto pagado es menor que el total del pedido.");
         var cashPaid = normalizedPayments.Where(payment => payment.Method == "efectivo").Sum(payment => payment.Amount);
-        if (paid - subtotal > cashPaid)
+        if (paid - total > cashPaid)
         {
             throw new ArgumentException("Los pagos electrónicos no pueden generar vuelto.");
         }
@@ -602,13 +628,15 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                     (id_cliente, id_turno, estado, subtotal, descuento, tipo_entrega, canal_origen,
                      costo_envio, id_operacion_cliente, telefono_contacto, es_prueba)
                 VALUES
-                    (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, 'retiro', 'local',
-                     0, @client_order_id, @contact_phone,
+                    (@customer_id, @shift_id, 'en_preparacion', @subtotal, 0, @delivery_type, 'local',
+                     @shipping_cost, @client_order_id, @contact_phone,
                      (SELECT es_prueba FROM turnos WHERE id_turno = @shift_id))
                 RETURNING id_pedido, numero_turno, creado_en;
                 """;
             orderCommand.Parameters.AddWithValue("subtotal", subtotal);
+            orderCommand.Parameters.AddWithValue("shipping_cost", shippingCost);
             orderCommand.Parameters.AddWithValue("shift_id", shiftId);
+            orderCommand.Parameters.AddWithValue("delivery_type", deliveryType);
             orderCommand.Parameters.Add("customer_id", NpgsqlDbType.Bigint).Value = (object?)command.CustomerId ?? DBNull.Value;
             orderCommand.Parameters.Add("client_order_id", NpgsqlDbType.Uuid).Value =
                 (object?)command.ClientOrderId ?? DBNull.Value;
@@ -619,6 +647,28 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             orderId = reader.GetInt64(0);
             orderNumber = reader.GetInt32(1);
             createdAt = reader.GetFieldValue<DateTimeOffset>(2);
+        }
+
+        if (delivery is not null)
+        {
+            await using var deliveryCommand = connection.CreateCommand();
+            deliveryCommand.Transaction = transaction;
+            deliveryCommand.CommandText = """
+                INSERT INTO entregas_pedido
+                    (id_pedido, nombre_receptor, telefono_receptor, calle, numero, comuna, referencia)
+                VALUES
+                    (@order_id,
+                     COALESCE((SELECT nombre FROM clientes WHERE id_cliente = @customer_id), 'Cliente caja'),
+                     @phone, @street, @number, 'La Serena', @zone);
+                """;
+            deliveryCommand.Parameters.AddWithValue("order_id", orderId);
+            deliveryCommand.Parameters.Add("customer_id", NpgsqlDbType.Bigint).Value =
+                (object?)command.CustomerId ?? DBNull.Value;
+            deliveryCommand.Parameters.AddWithValue("phone", contactPhone!);
+            deliveryCommand.Parameters.AddWithValue("zone", $"Zona: {delivery.Zone}");
+            deliveryCommand.Parameters.AddWithValue("street", localDeliveryAddress.Street);
+            deliveryCommand.Parameters.AddWithValue("number", localDeliveryAddress.Number);
+            await deliveryCommand.ExecuteNonQueryAsync(cancellationToken);
         }
 
         foreach (var item in validatedItems)
@@ -736,7 +786,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         }
 
         await transaction.CommitAsync(cancellationToken);
-        return new CreatedOrder(orderId, subtotal, paid, Math.Max(paid - subtotal, 0), createdAt, remainingPoints, orderNumber);
+        return new CreatedOrder(orderId, total, paid, Math.Max(paid - total, 0), createdAt, remainingPoints, orderNumber);
     }
 
     private static async Task<CreatedOrder?> GetCreatedOrderByClientIdAsync(
@@ -811,9 +861,14 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             command.CommandText = """
                 SELECT p.id_pedido, p.estado, p.tipo_entrega, p.canal_origen,
                        p.subtotal, p.descuento, p.costo_envio, p.total, p.observaciones,
-                       c.nombre, c.telefono, p.telefono_contacto, p.creado_en, p.numero_turno
+                       c.nombre, c.telefono, p.telefono_contacto,
+                       CASE WHEN e.id_entrega IS NULL THEN NULL ELSE
+                           CONCAT_WS(', ', CONCAT_WS(' ', e.calle, e.numero), e.comuna, NULLIF(e.referencia, ''))
+                       END,
+                       p.creado_en, p.numero_turno
                   FROM pedidos p
                   LEFT JOIN clientes c ON c.id_cliente = p.id_cliente
+                  LEFT JOIN entregas_pedido e ON e.id_pedido = p.id_pedido
                  WHERE p.id_pedido = @order_id;
                 """;
             command.Parameters.AddWithValue("order_id", orderId);
@@ -826,8 +881,9 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                 reader.IsDBNull(9) ? null : reader.GetString(9),
                 reader.IsDBNull(10) ? null : reader.GetString(10),
                 reader.IsDBNull(11) ? null : reader.GetString(11),
-                reader.GetFieldValue<DateTimeOffset>(12),
-                reader.IsDBNull(13) ? null : reader.GetInt32(13));
+                reader.IsDBNull(12) ? null : reader.GetString(12),
+                reader.GetFieldValue<DateTimeOffset>(13),
+                reader.IsDBNull(14) ? null : reader.GetInt32(14));
         }
 
         var items = new List<PosOrderItem>();
@@ -873,7 +929,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         return new PosOrderDetails(
             header.Id, header.Status, header.DeliveryType, header.Channel,
             header.Subtotal, header.Discount, header.ShippingCost, header.Total,
-            header.Notes, header.CustomerName, header.CustomerPhone, header.ContactPhone, header.CreatedAt,
+            header.Notes, header.CustomerName, header.CustomerPhone, header.ContactPhone, header.DeliveryAddress, header.CreatedAt,
             items, payments, header.OrderNumber);
     }
 
@@ -1069,7 +1125,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                 SELECT p.id_pedido, p.tipo_entrega, p.canal_origen,
                        COALESCE(cocina.iniciado_en, p.creado_en) AS iniciado_en,
                        COALESCE(e.nombre_receptor, c.nombre),
-                       COALESCE(e.telefono_receptor, c.telefono),
+                       COALESCE(e.telefono_receptor, p.telefono_contacto, c.telefono),
                        CASE WHEN e.id_entrega IS NULL THEN NULL ELSE
                            CONCAT_WS(', ', CONCAT_WS(' ', e.calle, e.numero),
                                NULLIF(e.departamento, ''), e.comuna, NULLIF(e.referencia, ''))
@@ -1214,12 +1270,44 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
     {
         await using var command = dataSource.CreateCommand("""
             SELECT t.id_turno, t.estado, t.abierto_en, t.cerrado_en,
-                   t.id_usuario_apertura, u.nombre, t.monto_inicial, t.es_prueba
+                   t.id_usuario_apertura, u.nombre, t.monto_inicial, t.es_prueba,
+                   t.espera_minima_minutos, t.espera_maxima_minutos
               FROM turnos t
               JOIN usuarios u ON u.id_usuario = t.id_usuario_apertura
              WHERE t.estado = 'abierto'
              LIMIT 1;
             """);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken) ? ReadShift(reader) : null;
+    }
+
+    public async Task<CashShift?> UpdateEstimatedWaitAsync(
+        long shiftId, UpdateEstimatedWait request, CancellationToken cancellationToken)
+    {
+        if ((request.MinMinutes is null) != (request.MaxMinutes is null))
+            throw new ArgumentException("Indica ambos límites del tiempo de espera o deja ambos vacíos.");
+        if (request.MinMinutes is int min && (min < 5 || min > 240))
+            throw new ArgumentException("El tiempo mínimo debe estar entre 5 y 240 minutos.");
+        if (request.MaxMinutes is int max && (max < 5 || max > 240))
+            throw new ArgumentException("El tiempo máximo debe estar entre 5 y 240 minutos.");
+        if (request.MinMinutes > request.MaxMinutes)
+            throw new ArgumentException("El tiempo mínimo no puede ser mayor que el máximo.");
+
+        await using var command = dataSource.CreateCommand("""
+            UPDATE turnos
+               SET espera_minima_minutos = @min_minutes,
+                   espera_maxima_minutos = @max_minutes,
+                   actualizado_en = NOW()
+             WHERE id_turno = @shift_id AND estado = 'abierto'
+            RETURNING id_turno, estado, abierto_en, cerrado_en, id_usuario_apertura,
+                      (SELECT nombre FROM usuarios WHERE id_usuario=id_usuario_apertura),
+                      monto_inicial, es_prueba, espera_minima_minutos, espera_maxima_minutos;
+            """);
+        command.Parameters.AddWithValue("shift_id", shiftId);
+        command.Parameters.Add("min_minutes", NpgsqlDbType.Integer).Value =
+            (object?)request.MinMinutes ?? DBNull.Value;
+        command.Parameters.Add("max_minutes", NpgsqlDbType.Integer).Value =
+            (object?)request.MaxMinutes ?? DBNull.Value;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         return await reader.ReadAsync(cancellationToken) ? ReadShift(reader) : null;
     }
@@ -1254,7 +1342,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             await using var reader = await shiftCommand.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken)) throw new ArgumentException("El usuario de caja no está activo.");
             shift = new CashShift(reader.GetInt64(0), reader.GetString(1),
-                reader.GetFieldValue<DateTimeOffset>(2), null, reader.GetInt64(4), reader.GetString(6), reader.GetDecimal(5), reader.GetBoolean(7));
+                reader.GetFieldValue<DateTimeOffset>(2), null, reader.GetInt64(4), reader.GetString(6), reader.GetDecimal(5), reader.GetBoolean(7), null, null);
         }
 
         await transaction.CommitAsync(cancellationToken);
@@ -1455,7 +1543,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         command.Transaction = transaction;
         command.CommandText = $"""
             SELECT t.id_turno, t.estado, t.abierto_en, t.cerrado_en,
-                   t.id_usuario_apertura, u.nombre, t.monto_inicial, t.es_prueba
+                   t.id_usuario_apertura, u.nombre, t.monto_inicial, t.es_prueba,
+                   t.espera_minima_minutos, t.espera_maxima_minutos
               FROM turnos t
               JOIN usuarios u ON u.id_usuario = t.id_usuario_apertura
              WHERE t.estado = 'abierto'
@@ -1468,7 +1557,9 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
     private static CashShift ReadShift(NpgsqlDataReader reader) => new(
         reader.GetInt64(0), reader.GetString(1), reader.GetFieldValue<DateTimeOffset>(2),
         reader.IsDBNull(3) ? null : reader.GetFieldValue<DateTimeOffset>(3),
-        reader.GetInt64(4), reader.GetString(5), reader.GetDecimal(6), reader.GetBoolean(7));
+        reader.GetInt64(4), reader.GetString(5), reader.GetDecimal(6), reader.GetBoolean(7),
+        reader.IsDBNull(8) ? null : reader.GetInt32(8),
+        reader.IsDBNull(9) ? null : reader.GetInt32(9));
 
     private static async Task<CashShiftReport?> BuildShiftReportAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, long shiftId,
@@ -1483,6 +1574,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             shiftCommand.CommandText = """
                 SELECT t.id_turno, t.estado, t.abierto_en, t.cerrado_en,
                        t.id_usuario_apertura, u.nombre, t.monto_inicial, t.es_prueba,
+                       t.espera_minima_minutos, t.espera_maxima_minutos,
                        t.efectivo_contado, t.diferencia_efectivo
                   FROM turnos t
                   JOIN usuarios u ON u.id_usuario = t.id_usuario_apertura
@@ -1492,8 +1584,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             await using var reader = await shiftCommand.ExecuteReaderAsync(cancellationToken);
             if (!await reader.ReadAsync(cancellationToken)) return null;
             shift = ReadShift(reader);
-            countedCash = reader.IsDBNull(8) ? null : reader.GetDecimal(8);
-            cashDifference = reader.IsDBNull(9) ? null : reader.GetDecimal(9);
+            countedCash = reader.IsDBNull(10) ? null : reader.GetDecimal(10);
+            cashDifference = reader.IsDBNull(11) ? null : reader.GetDecimal(11);
         }
 
         int orderCount;
@@ -1879,6 +1971,19 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         return digits.Length == 9 && digits.StartsWith('9') ? $"56{digits}" : digits;
     }
 
+    private static (string Street, string Number) SplitLocalDeliveryAddress(string address)
+    {
+        var normalized = string.Join(' ', address.Trim().Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        var lastSpace = normalized.LastIndexOf(' ');
+        if (lastSpace > 0)
+        {
+            var possibleNumber = normalized[(lastSpace + 1)..].Trim().TrimEnd(',', '.');
+            if (possibleNumber.Length <= 20 && possibleNumber.Any(char.IsDigit))
+                return (normalized[..lastSpace].Trim(), possibleNumber);
+        }
+        return (normalized, "S/N");
+    }
+
     private sealed class ProductBuilder(long id, string name, string category, string? description, decimal price, decimal? originalPrice, string? imageUrl, bool available, bool requiresConfiguration, int promotionRollCount, int promotionSauceCount)
     {
         public long Id { get; } = id;
@@ -1920,5 +2025,5 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         long Id, string Status, string DeliveryType, string Channel,
         decimal Subtotal, decimal Discount, decimal ShippingCost, decimal Total,
         string? Notes, string? CustomerName, string? CustomerPhone, string? ContactPhone,
-        DateTimeOffset CreatedAt, int? OrderNumber);
+        string? DeliveryAddress, DateTimeOffset CreatedAt, int? OrderNumber);
 }

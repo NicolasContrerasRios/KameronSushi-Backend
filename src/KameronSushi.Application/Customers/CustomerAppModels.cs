@@ -8,8 +8,13 @@ public sealed record CustomerSession(string Token, DateTimeOffset ExpiresAt, Cus
 public sealed record CustomerProfile(long CustomerId, string Name, string Phone, string? Email, int Points);
 public sealed record CustomerPromotion(long PromotionId, long ProductId, string Name, string? Description,
     decimal OriginalPrice, decimal OfferPrice, bool Pickup, bool Delivery);
-public sealed record CustomerHome(bool IsOpen, CustomerProfile? Customer,
-    IReadOnlyList<CustomerPromotion> Promotions, IReadOnlyList<CustomerReward> Rewards);
+public sealed record CustomerHome(
+    bool IsOpen,
+    CustomerProfile? Customer,
+    IReadOnlyList<CustomerPromotion> Promotions,
+    IReadOnlyList<CustomerReward> Rewards,
+    int? EstimatedWaitMinMinutes = null,
+    int? EstimatedWaitMaxMinutes = null);
 public sealed record CustomerReward(long RewardProductId, long ProductId, string Name, string? Description,
     int PointsCost, int? Stock, int? LimitPerOrder, bool CanRedeem);
 public sealed record RegisterNotificationDevice(string DeviceToken, string Platform, string? DeviceName);

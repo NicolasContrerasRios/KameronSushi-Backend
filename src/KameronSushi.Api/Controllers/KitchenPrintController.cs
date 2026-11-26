@@ -6,7 +6,7 @@ using Microsoft.AspNetCore.Authorization;
 namespace KameronSushi.Api.Controllers;
 
 [ApiController]
-[Authorize(Roles = "administrador,cocina")]
+[Authorize(Roles = "administrador,cocina,caja")]
 [Route("api/kitchen/print-jobs")]
 public sealed class KitchenPrintController(IPosStore store) : ControllerBase
 {

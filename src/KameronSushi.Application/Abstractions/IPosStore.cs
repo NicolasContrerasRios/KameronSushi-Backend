@@ -21,6 +21,7 @@ public interface IPosStore
     Task<bool> CompleteKitchenPrintJobAsync(Guid claimToken, string workerId, CancellationToken cancellationToken);
     Task<bool> FailKitchenPrintJobAsync(Guid claimToken, string workerId, string error, CancellationToken cancellationToken);
     Task<CashShift?> GetCurrentShiftAsync(CancellationToken cancellationToken);
+    Task<CashShift?> UpdateEstimatedWaitAsync(long shiftId, UpdateEstimatedWait request, CancellationToken cancellationToken);
     Task<CashShift> OpenShiftAsync(decimal openingAmount, bool isTest, long userId, CancellationToken cancellationToken);
     Task<CashShiftReport?> GetShiftReportAsync(long shiftId, CancellationToken cancellationToken);
     Task<CashMovement?> AddCashMovementAsync(long shiftId, CreateCashMovement movement, CancellationToken cancellationToken);

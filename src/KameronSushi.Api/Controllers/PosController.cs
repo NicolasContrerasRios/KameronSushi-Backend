@@ -34,6 +34,21 @@ public sealed class PosController(IPosStore store, IPushNotificationService noti
         }
     }
 
+    [HttpPut("shifts/{shiftId:long}/estimated-wait")]
+    public async Task<ActionResult<CashShift>> UpdateEstimatedWait(
+        long shiftId, UpdateEstimatedWait request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var shift = await store.UpdateEstimatedWaitAsync(shiftId, request, cancellationToken);
+            return shift is null ? NotFound() : Ok(shift);
+        }
+        catch (ArgumentException exception)
+        {
+            return CashOperationProblem(exception);
+        }
+    }
+
     [HttpGet("shifts/{shiftId:long}/report")]
     public async Task<ActionResult<CashShiftReport>> GetShiftReport(long shiftId, CancellationToken cancellationToken)
     {

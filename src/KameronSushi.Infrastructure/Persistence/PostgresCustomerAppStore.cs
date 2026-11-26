@@ -345,10 +345,27 @@ public sealed class PostgresCustomerAppStore(
                     reader.IsDBNull(5)?null:reader.GetInt32(5),reader.IsDBNull(6)?null:reader.GetInt32(6),profile is not null && profile.Points>=cost));
             }
         }
-        await using var shift = connection.CreateCommand();
-        shift.CommandText = "SELECT EXISTS(SELECT 1 FROM turnos WHERE estado='abierto');";
-        var isOpen = Convert.ToBoolean(await shift.ExecuteScalarAsync(cancellationToken));
-        return new CustomerHome(isOpen, profile, promotions, rewards);
+        bool isOpen;
+        int? estimatedWaitMin = null;
+        int? estimatedWaitMax = null;
+        await using (var shift = connection.CreateCommand())
+        {
+            shift.CommandText = """
+                SELECT espera_minima_minutos, espera_maxima_minutos
+                  FROM turnos
+                 WHERE estado='abierto'
+                 ORDER BY abierto_en DESC
+                 LIMIT 1;
+                """;
+            await using var reader = await shift.ExecuteReaderAsync(cancellationToken);
+            isOpen = await reader.ReadAsync(cancellationToken);
+            if (isOpen)
+            {
+                estimatedWaitMin = reader.IsDBNull(0) ? null : reader.GetInt32(0);
+                estimatedWaitMax = reader.IsDBNull(1) ? null : reader.GetInt32(1);
+            }
+        }
+        return new CustomerHome(isOpen, profile, promotions, rewards, estimatedWaitMin, estimatedWaitMax);
     }
 
     public async Task<IReadOnlyList<CustomerOrderSummary>> GetOrdersAsync(
