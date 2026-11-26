@@ -673,6 +673,10 @@ public static class DatabaseMigrations
             await using var migrationCommand = connection.CreateCommand();
             migrationCommand.Transaction = transaction;
             migrationCommand.CommandText = """
+                UPDATE producto_envolturas pe SET predeterminada=FALSE
+                  FROM productos p,categorias c
+                 WHERE pe.id_producto=p.id_producto AND c.id_categoria=p.id_categoria
+                   AND LOWER(c.nombre_categoria)='hand rolls';
                 INSERT INTO producto_envolturas (id_producto,id_envoltura,precio_adicional,predeterminada,activa)
                 SELECT p.id_producto,e.id_envoltura,0,TRUE,TRUE
                   FROM productos p JOIN categorias c ON c.id_categoria=p.id_categoria
