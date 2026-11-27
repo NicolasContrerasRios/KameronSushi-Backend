@@ -11,6 +11,8 @@ public sealed record SaveAdminProduct(
     long CategoryId, string Name, string? Description, decimal Price,
     bool Active = true, bool Available = true, bool RequiresConfiguration = false, int Order = 0);
 
+public sealed record SetAdminProductAvailability(bool? Available);
+
 public sealed record AdminWrapper(long Id, string Name, bool Active);
 public sealed record SaveAdminWrapper(string Name, bool Active = true);
 public sealed record AdminSauce(long Id, string Name, string? Description, bool Active);

@@ -16,6 +16,17 @@ public sealed class CustomerOrderingController(IPosStore store, ICustomerAppStor
     public async Task<ActionResult<IReadOnlyList<CatalogProduct>>> GetCatalog(CancellationToken cancellationToken) =>
         Ok(await store.GetCatalogAsync(cancellationToken));
 
+    [HttpGet("complements")]
+    public async Task<ActionResult<IReadOnlyList<ComplementRecommendation>>> GetComplements(
+        [FromQuery] long[]? productIds, [FromQuery] long[]? candidateIds, CancellationToken cancellationToken)
+    {
+        productIds ??= [];
+        candidateIds ??= [];
+        if (productIds.Length > 20 || candidateIds.Length > 60 || productIds.Concat(candidateIds).Any(id => id <= 0))
+            return BadRequest(new ProblemDetails { Status = 400, Title = "La selección de productos no es válida." });
+        return Ok(await store.GetComplementRecommendationsAsync(productIds.Distinct().ToArray(), candidateIds.Distinct().ToArray(), cancellationToken));
+    }
+
     [HttpGet("availability")]
     public async Task<ActionResult<CustomerOrderingAvailability>> GetAvailability(CancellationToken cancellationToken)
     {

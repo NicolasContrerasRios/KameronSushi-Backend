@@ -10,6 +10,46 @@ namespace KameronSushi.Infrastructure.Persistence;
 
 public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
 {
+    public async Task<IReadOnlyList<ComplementRecommendation>> GetComplementRecommendationsAsync(
+        IReadOnlyList<long> productIds, IReadOnlyList<long> candidateIds, CancellationToken cancellationToken)
+    {
+        if (candidateIds.Count == 0) return [];
+        if (productIds.Count > 20 || candidateIds.Count > 60 || productIds.Concat(candidateIds).Any(id => id <= 0))
+            throw new ArgumentException("La selección de productos para sugerencias no es válida.");
+        await using var command = dataSource.CreateCommand("""
+            WITH eligible_orders AS (
+                SELECT id_pedido FROM pedidos
+                 WHERE es_prueba = FALSE AND estado <> 'cancelado'
+                   AND creado_en >= NOW() - INTERVAL '90 days'
+            ), related_orders AS (
+                SELECT DISTINCT d.id_pedido FROM detalle_pedidos d
+                JOIN eligible_orders e ON e.id_pedido = d.id_pedido
+                 WHERE d.id_producto = ANY(@product_ids)
+            )
+            SELECT p.id_producto,
+                   COUNT(DISTINCT d.id_pedido) FILTER (WHERE r.id_pedido IS NOT NULL) AS related_count,
+                   COUNT(DISTINCT d.id_pedido) AS popular_count
+              FROM productos p
+              JOIN categorias c ON c.id_categoria = p.id_categoria
+              LEFT JOIN detalle_pedidos d ON d.id_producto = p.id_producto
+                   AND d.id_pedido IN (SELECT id_pedido FROM eligible_orders)
+              LEFT JOIN related_orders r ON r.id_pedido = d.id_pedido
+             WHERE p.id_producto = ANY(@candidate_ids) AND NOT (p.id_producto = ANY(@product_ids))
+               AND p.activo = TRUE AND p.disponible = TRUE AND c.activa = TRUE
+               AND p.requiere_configuracion = FALSE
+             GROUP BY p.id_producto
+             ORDER BY related_count DESC, popular_count DESC, p.orden, p.nombre_producto
+             LIMIT 60;
+            """);
+        command.Parameters.AddWithValue("product_ids", NpgsqlDbType.Array | NpgsqlDbType.Bigint, productIds.Distinct().ToArray());
+        command.Parameters.AddWithValue("candidate_ids", NpgsqlDbType.Array | NpgsqlDbType.Bigint, candidateIds.Distinct().ToArray());
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        var result = new List<ComplementRecommendation>();
+        while (await reader.ReadAsync(cancellationToken))
+            result.Add(new(reader.GetInt64(0), reader.GetInt64(1) > 0 ? "together" : reader.GetInt64(2) > 0 ? "popular" : "suggested"));
+        return result;
+    }
+
     public async Task<IReadOnlyList<CatalogProduct>> GetCatalogAsync(CancellationToken cancellationToken)
     {
         await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
@@ -551,6 +591,8 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                 throw new ArgumentException("Ingresa una dirección válida para el delivery.");
             if (delivery.Address.Trim().Length > 150)
                 throw new ArgumentException("La dirección no puede superar 150 caracteres.");
+            if (delivery.Name is not null && (string.IsNullOrWhiteSpace(delivery.Name) || delivery.Name.Trim().Length > 150))
+                throw new ArgumentException("Ingresa un nombre de cliente de entre 1 y 150 caracteres.");
         }
         var contactPhone = NormalizeOptionalContactPhone(delivery?.Phone ?? command.ContactPhone);
         if (deliveryType == "delivery" && contactPhone is null)
@@ -663,10 +705,12 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
                     (id_pedido, nombre_receptor, telefono_receptor, calle, numero, comuna, referencia)
                 VALUES
                     (@order_id,
-                     COALESCE((SELECT nombre FROM clientes WHERE id_cliente = @customer_id), 'Cliente caja'),
+                     COALESCE(@recipient_name, (SELECT nombre FROM clientes WHERE id_cliente = @customer_id), 'Cliente caja'),
                      @phone, @street, @number, 'La Serena', @zone);
                 """;
             deliveryCommand.Parameters.AddWithValue("order_id", orderId);
+            deliveryCommand.Parameters.Add("recipient_name", NpgsqlDbType.Varchar).Value =
+                (object?)delivery.Name?.Trim() ?? DBNull.Value;
             deliveryCommand.Parameters.Add("customer_id", NpgsqlDbType.Bigint).Value =
                 (object?)command.CustomerId ?? DBNull.Value;
             deliveryCommand.Parameters.AddWithValue("phone", contactPhone!);
@@ -832,13 +876,14 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
         await using var command = dataSource.CreateCommand("""
             SELECT p.id_pedido, p.estado, p.tipo_entrega, p.canal_origen, p.total,
                    COALESCE(SUM(d.cantidad), 0)::integer AS cantidad_items,
-                   c.nombre, p.creado_en, p.numero_turno
+                   COALESCE(e.nombre_receptor, c.nombre), p.creado_en, p.numero_turno
               FROM pedidos p
               LEFT JOIN clientes c ON c.id_cliente = p.id_cliente
+              LEFT JOIN entregas_pedido e ON e.id_pedido = p.id_pedido
               LEFT JOIN detalle_pedidos d ON d.id_pedido = p.id_pedido
              WHERE (@status IS NULL OR p.estado = @status)
                AND (@shift_id IS NULL OR p.id_turno = @shift_id)
-             GROUP BY p.id_pedido, c.nombre
+             GROUP BY p.id_pedido, c.nombre, e.nombre_receptor
              ORDER BY p.creado_en DESC
              LIMIT @limit;
             """);
@@ -866,7 +911,7 @@ public sealed class PostgresPosStore(NpgsqlDataSource dataSource) : IPosStore
             command.CommandText = """
                 SELECT p.id_pedido, p.estado, p.tipo_entrega, p.canal_origen,
                        p.subtotal, p.descuento, p.costo_envio, p.total, p.observaciones,
-                       c.nombre, c.telefono, p.telefono_contacto,
+                       COALESCE(e.nombre_receptor, c.nombre), COALESCE(e.telefono_receptor, c.telefono), p.telefono_contacto,
                        CASE WHEN e.id_entrega IS NULL THEN NULL ELSE
                            CONCAT_WS(', ', CONCAT_WS(' ', e.calle, e.numero), e.comuna, NULLIF(e.referencia, ''))
                        END,

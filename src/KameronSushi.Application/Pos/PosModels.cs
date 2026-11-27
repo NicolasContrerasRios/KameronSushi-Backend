@@ -1,5 +1,7 @@
 namespace KameronSushi.Application.Pos;
 
+public sealed record ComplementRecommendation(long ProductId, string Reason);
+
 public sealed record CatalogProduct(
     long Id,
     string Name,
@@ -55,7 +57,7 @@ public sealed record CreateLocalOrder(
     string DeliveryType = "retiro",
     LocalDeliveryDetails? Delivery = null);
 
-public sealed record LocalDeliveryDetails(string Address, string Phone, string? Zone = null);
+public sealed record LocalDeliveryDetails(string Address, string Phone, string? Zone = null, string? Name = null);
 
 public sealed record CancelOrder(string Reason);
 

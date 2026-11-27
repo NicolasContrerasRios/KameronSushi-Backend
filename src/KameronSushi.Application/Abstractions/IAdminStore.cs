@@ -4,6 +4,7 @@ namespace KameronSushi.Application.Abstractions;
 
 public interface IAdminStore
 {
+    Task<AdminProduct?> SetProductAvailabilityAsync(long productId, bool available, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminCategory>> GetCategoriesAsync(CancellationToken cancellationToken);
     Task<AdminCategory> SaveCategoryAsync(long? categoryId, SaveAdminCategory category, CancellationToken cancellationToken);
     Task<IReadOnlyList<AdminProduct>> GetProductsAsync(CancellationToken cancellationToken);

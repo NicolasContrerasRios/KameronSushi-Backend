@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication;
 using KameronSushi.Infrastructure;
 using Microsoft.AspNetCore.HttpOverrides;
 using System.Threading.RateLimiting;
+using KameronSushi.Api.Realtime;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -12,7 +13,8 @@ if (int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var renderPort)
     builder.WebHost.UseUrls($"http://0.0.0.0:{renderPort}");
 }
 
-builder.Services.AddControllers();
+builder.Services.AddControllers(options => options.Filters.Add<DesktopUpdatesFilter>());
+builder.Services.AddSignalR();
 builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();
 builder.Services.AddAuthentication(SessionAuthenticationHandler.SchemeName)
@@ -66,6 +68,7 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<DesktopUpdatesHub>("/hubs/desktop-updates");
 app.MapHealthChecks("/health");
 
 app.Run();

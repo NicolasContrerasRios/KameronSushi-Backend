@@ -46,6 +46,16 @@ public sealed class AdminController(
         }
     }
 
+    [HttpPatch("products/{productId:long}/availability")]
+    public async Task<ActionResult<AdminProduct>> SetProductAvailability(
+        long productId, SetAdminProductAvailability request, CancellationToken cancellationToken)
+    {
+        if (request.Available is not bool available)
+            return BadRequest(new ProblemDetails { Status = 400, Title = "Indica si el producto estará disponible." });
+        var product = await store.SetProductAvailabilityAsync(productId, available, cancellationToken);
+        return product is null ? NotFound() : Ok(product);
+    }
+
     [HttpPut("products/{productId:long}")]
     public async Task<ActionResult<AdminProduct>> UpdateProduct(
         long productId, SaveAdminProduct product, CancellationToken cancellationToken)

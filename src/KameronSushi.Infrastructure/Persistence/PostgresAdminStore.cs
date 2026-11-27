@@ -62,6 +62,19 @@ public sealed class PostgresAdminStore(NpgsqlDataSource dataSource) : IAdminStor
         return result;
     }
 
+    public async Task<AdminProduct?> SetProductAvailabilityAsync(long productId, bool available, CancellationToken cancellationToken)
+    {
+        await using var command = dataSource.CreateCommand("""
+            UPDATE productos SET disponible = @available, actualizado_en = NOW()
+             WHERE id_producto = @product_id
+             RETURNING id_producto;
+            """);
+        command.Parameters.AddWithValue("available", available);
+        command.Parameters.AddWithValue("product_id", productId);
+        var id = await command.ExecuteScalarAsync(cancellationToken);
+        return id is null ? null : await GetProductAsync(productId, cancellationToken);
+    }
+
     public async Task<AdminProduct> CreateProductAsync(SaveAdminProduct product, CancellationToken cancellationToken)
     {
         ValidateProduct(product);
